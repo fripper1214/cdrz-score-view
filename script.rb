@@ -191,7 +191,7 @@ WITH
       ,COUNT(1) AS "cnt_whole_by_score"
       ,MIN(t.view_count) AS "lvc_by_score"
       ,MAX(t.view_count) AS "hvc_by_score"
-      ,(CASE WHEN MIN(t.view_count) = MAX(view_count)
+      ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
         THEN MAX(t.view_count) + 1
         ELSE MAX(t.view_count) END) AS "bvc_by_score"
     FROM "t_whole" AS "t"
@@ -200,7 +200,7 @@ WITH
     SELECT t.*
       ,(CASE WHEN t.view_count < v.bvc_by_score
         THEN 1 ELSE NULL END) AS "vcflag"
-    FROM "t_whole" AS t, "v_whole_by_score" AS v
+    FROM "t_whole" AS "t", "v_whole_by_score" AS "v"
     WHERE t.score = v.score_whole_by_score)
   ,"v_vcflag_by_score" AS (
     SELECT t.score AS "score_vcflag_by_score"
@@ -210,14 +210,14 @@ WITH
       ,(CASE WHEN MIN(t.recent_clock) > :criterion_clock
         THEN MAX(t.recent_clock) + 1
         ELSE :criterion_clock END) AS "bclk_vcflag_by_score"
-    FROM "t_vcflag" AS t
+    FROM "t_vcflag" AS "t"
     WHERE t.vcflag = 1
     GROUP BY t.score)
   ,"t_remainflag" AS (
     SELECT t.*
-      ,(CASE WHEN t.recent_clock < bclk_vcflag_by_score
+      ,(CASE WHEN t.recent_clock < v.bclk_vcflag_by_score
         THEN 1 ELSE NULL END) AS "remainflag"
-    FROM "t_vcflag" AS t, "v_vcflag_by_score" AS v
+    FROM "t_vcflag" AS "t", "v_vcflag_by_score" AS "v"
     WHERE t.score = v.score_vcflag_by_score)
   ,"v_remainflag" AS (
     SELECT COUNT(1) AS "cnt_total_remainflag"
@@ -225,7 +225,7 @@ WITH
         THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag"
       ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
         THEN 1 ELSE NULL END) AS "cnt_remain_remainflag"
-    FROM "t_remainflag" AS t)
+    FROM "t_remainflag" AS "t")
   ,"v_remainflag_by_score" AS (
     SELECT t.score AS "score_remainflag_by_score"
       ,COUNT(1) AS "cnt_total_remainflag_by_score"
@@ -233,13 +233,13 @@ WITH
         THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag_by_score"
       ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
         THEN 1 ELSE NULL END) AS "cnt_remain_remainflag_by_score"
-    FROM "t_remainflag" AS t
+    FROM "t_remainflag" AS "t"
     GROUP BY t.score)
   ,"v_sum_by_score" AS (
     SELECT SUM(v.cnt_total_remainflag_by_score) AS "sum_total_by_score"
       ,SUM(v.cnt_leaved_remainflag_by_score) AS "sum_leaved_by_score"
       ,SUM(v.cnt_remain_remainflag_by_score) AS "sum_remain_by_score"
-    FROM "v_remainflag_by_score" as v
+    FROM "v_remainflag_by_score" as "v"
     WHERE v.score_remainflag_by_score
       BETWEEN :score_min AND :score_max)
   ,"t_contents" AS (
@@ -259,14 +259,14 @@ EOF_SQL
 SQL_CONTENTS_GET_VCINFO = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
 SELECT v.*
-FROM "v_whole_by_score" AS v
+FROM "v_whole_by_score" AS "v"
 EOF_SQL
 
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
   ,"t_scored" AS (
     SELECT t.*
-    FROM "t_contents" AS t, "v_whole" AS v
+    FROM "t_contents" AS "t", "v_whole" AS "v"
     WHERE t.remainflag = 1
       AND t.vcflag = 1
       AND t.score
