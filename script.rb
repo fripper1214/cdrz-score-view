@@ -117,7 +117,7 @@ UPDATE "contents" SET
   "view_count"    = :view_count,
   "recent_clock"  = :recent_clock,
   "elapsed_sec"   = elapsed_sec + :elapsed_sec,
-  "score"         = :score,
+  "score"         = :content_score,
   "flag"          = :flag
 WHERE "ids256" = :ids256;
 EOF_SQL
@@ -173,117 +173,118 @@ UPDATE __TBL__ SET
 WHERE "flag" = :flag_target;
 EOF_SQL
 
-SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
+SQL_WITH_CLAUSE     = <<-"EOF_SQL"
 WITH
   "t_whole" AS (
-    SELECT *
+    SELECT "contents".*
     FROM "contents"
     WHERE flag = #{FLAG_NORMAL})
   ,"v_whole" AS (
-    SELECT COUNT(ids256) AS "cnt_whole"
-      ,COUNT(CASE WHEN recent_clock <  :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_remain_whole"
-      ,COUNT(CASE WHEN recent_clock >= :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_leaved_whole"
+    SELECT COUNT(1) AS "cnt_whole"
       ,MIN(score) AS "min_score"
       ,MAX(score) AS "max_score"
     FROM "t_whole")
-  ,"t_scored" AS (
-    SELECT t_whole.*
-    FROM "t_whole", "v_whole"
-    WHERE score >= MAX(min_score, MIN(max_score, :score)))
-  ,"v_scored" AS (
-    SELECT COUNT(ids256) AS "cnt_scored"
-      ,COUNT(CASE WHEN recent_clock <  :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_remain_scored"
-      ,COUNT(CASE WHEN recent_clock >= :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_leaved_scored"
-    FROM "t_scored")
-  ,"i_v_by_score" AS (
-    SELECT score AS "score_by_score"
-      ,COUNT(ids256) AS "cnt_all_by_score"
-      ,COUNT(CASE WHEN recent_clock <  :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_remain_by_score"
-      ,COUNT(CASE WHEN recent_clock >= :criterion_clock THEN ids256 ELSE NULL END) AS "cnt_leaved_by_score"
-      ,(CASE WHEN COUNT(ids256) > 0 THEN MIN(view_count) ELSE 0 END) AS "vc_min_by_score"
-      ,(CASE WHEN COUNT(ids256) > 0 THEN MAX(view_count) ELSE 0 END) AS "vc_max_by_score"
-    FROM "t_scored"
+  ,"v_whole_by_score" AS (
+    SELECT score AS "score_whole_by_score"
+      ,COUNT(1) AS "cnt_whole_by_score"
+      ,MIN(view_count) AS "min_vc_by_score"
+      ,MAX(view_count) AS "max_vc_by_score"
+      ,(CASE WHEN MIN(view_count) = MAX(view_count)
+        THEN MAX(view_count) + 1
+        ELSE MAX(view_count) END) AS "bound_vc_by_score"
+    FROM "t_whole"
     GROUP BY score)
-  ,"v_by_score" AS (
-    SELECT *
-      ,(CASE WHEN vc_min_by_score = vc_max_by_score
-        THEN vc_max_by_score + 1
-        ELSE vc_max_by_score END) AS "vc_bound_by_score"
-    FROM "i_v_by_score")
-  ,"i_v_by_score_vc" AS (
-    SELECT score AS "score_by_score_vc"
-      ,COUNT(CASE WHEN view_count < vc_bound_by_score THEN ids256 ELSE NULL END) AS "cnt_remain_by_score_vc"
-      ,COUNT(CASE WHEN view_count = vc_bound_by_score THEN ids256 ELSE NULL END) AS "cnt_leaved_by_score_vc"
-      ,MIN(CASE WHEN view_count < vc_bound_by_score
-        THEN recent_clock
-        ELSE :criterion_clock + 1000 END) AS "i_clk_min_by_score_vc"
-      ,MAX(CASE WHEN view_count < vc_bound_by_score
-        THEN recent_clock
-        ELSE 0 END) AS "i_clk_max_by_score_vc"
-    FROM "t_scored", "v_by_score"
-    WHERE score = score_by_score
+  ,"t_vcflag" AS (
+    SELECT "t_whole".*
+      ,(CASE WHEN view_count < bound_vc_by_score THEN 1 ELSE NULL END) AS "vc_flag"
+    FROM "t_whole", "v_whole_by_score"
+    WHERE score = score_whole_by_score)
+  ,"v_vcflag_by_score" AS (
+    SELECT score AS "score_vcflag_by_score"
+      ,COUNT(1) AS "cnt_vcflag_by_score"
+      ,MIN(recent_clock) AS "min_clk_vcflag_by_score"
+      ,MAX(recent_clock) AS "max_clk_vcflag_by_score"
+      ,(CASE WHEN MIN(recent_clock) > :criterion_clock
+        THEN MAX(recent_clock) + 1
+        ELSE :criterion_clock END) AS "bound_clk_vcflag_by_score"
+    FROM "t_vcflag"
+    WHERE vc_flag = 1
     GROUP BY score)
-  ,"i2_v_by_score_vc" AS (
+  ,"t_remainflag" AS (
+    SELECT "t_vcflag".*
+      ,(CASE WHEN recent_clock < bound_clk_vcflag_by_score THEN 1 ELSE NULL END) AS "remain_flag"
+    FROM "t_vcflag", "v_vcflag_by_score"
+    WHERE score = score_vcflag_by_score)
+  ,"v_remainflag" AS (
+    SELECT COUNT(1) AS "cnt_remainflag"
+      ,COUNT(CASE WHEN remain_flag IS NULL
+        THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag"
+      ,COUNT(CASE WHEN remain_flag = 1 AND vc_flag = 1
+        THEN 1 ELSE NULL END) AS "cnt_remain_remainflag"
+      ,COUNT(CASE WHEN remain_flag = 1 AND vc_flag IS NULL
+        THEN 1 ELSE NULL END) AS "cnt_prvmax_remainflag"
+    FROM "t_remainflag")
+  ,"v_remainflag_by_score" AS (
+    SELECT score AS "score_remainflag_by_score"
+      ,COUNT(1) AS "cnt_remainflag_by_score"
+      ,COUNT(CASE WHEN remain_flag IS NULL
+        THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag_by_score"
+      ,COUNT(CASE WHEN remain_flag = 1 AND vc_flag = 1
+        THEN 1 ELSE NULL END) AS "cnt_remain_remainflag_by_score"
+      ,COUNT(CASE WHEN remain_flag = 1 AND vc_flag IS NULL
+        THEN 1 ELSE NULL END) AS "cnt_prvmax_remainflag_by_score"
+    FROM "t_remainflag"
+    GROUP BY score)
+  ,"v_sum_by_score" AS (
+    SELECT e.score_remainflag_by_score AS "score_sum_by_score"
+      ,(SELECT SUM(av.cnt_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS av
+        WHERE av.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_by_score"
+      ,(SELECT SUM(lv.cnt_leaved_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS lv
+        WHERE lv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_leaved_by_score"
+      ,(SELECT SUM(rv.cnt_remain_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS rv
+        WHERE rv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_remain_by_score"
+      ,(SELECT SUM(lv.cnt_prvmax_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS lv
+        WHERE lv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_prvmax_by_score"
+    FROM "v_remainflag_by_score" as e
+    WHERE e.score_remainflag_by_score = :target_score)
+  ,"t_contents" AS (
     SELECT *
-      ,(CASE WHEN i_clk_min_by_score_vc IS NOT NULL
-        THEN i_clk_min_by_score_vc
-        ELSE 0 END) AS "clk_min_by_score_vc"
-      ,(CASE WHEN i_clk_max_by_score_vc IS NOT NULL
-        THEN i_clk_max_by_score_vc
-        ELSE :criterion_clock + 1000 END) AS "clk_max_by_score_vc"
-    FROM "i_v_by_score_vc")
-  ,"v_by_score_vc" AS (
-    SELECT *
-      ,(CASE WHEN clk_min_by_score_vc = clk_max_by_score_vc
-        THEN clk_max_by_score_vc + 1
-        ELSE clk_max_by_score_vc END) AS "clk_bound_by_score_vc"
-    FROM "i2_v_by_score_vc")
-  ,"v_by_vc" AS (
-    SELECT score_by_score_vc AS "score_by_vc"
-      ,SUM(cnt_remain_by_score_vc) AS "cnt_remain_by_vc"
-      ,SUM(cnt_leaved_by_score_vc) AS "cnt_leaved_by_vc"
-    FROM "v_by_score_vc")
-  ,"t_remain" AS (
-    SELECT *
-    FROM "t_scored"
+    FROM "t_remainflag"
       ,"v_whole"
-      ,"v_scored"
-      ,"v_by_score"
-      ,"v_by_score_vc"
-      ,"v_by_vc"
-    WHERE view_count < vc_bound_by_score
-      AND recent_clock < clk_bound_by_score_vc
-      AND score = score_by_score
-      AND score = score_by_score_vc)
+      ,"v_whole_by_score"
+      ,"v_vcflag_by_score"
+      ,"v_remainflag"
+      ,"v_remainflag_by_score"
+      ,"v_sum_by_score"
+    WHERE score = score_whole_by_score
+      AND score = score_vcflag_by_score
+      AND score = score_remainflag_by_score)
+EOF_SQL
+
+SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
+#{SQL_WITH_CLAUSE}
+  ,"t_scored" AS (
+    SELECT *
+    FROM "t_contents"
+    WHERE remain_flag = 1
+      AND vc_flag = 1
+      AND score >= MAX(min_score,MIN(max_score,:target_score)))
 SELECT *
-FROM "t_remain"
+FROM "t_scored"
 LIMIT 1
 OFFSET ABS(RANDOM()) % MAX((
-  SELECT COUNT(ids256) AS "count_remain"
-  FROM "t_remain"), 1);
+  SELECT COUNT(1) FROM "t_scored"), 1);
 EOF_SQL
 
 SQL_CONTENTS_SPECIFIED  = <<-"EOF_SQL"
-SELECT c.*
-  ,tbl_total.cnt_total AS "cnt_whole"
-  ,tbl_target.cnt_target AS "count_remain"
-FROM "contents" AS "c"
-  ,(SELECT COUNT(*) AS "cnt_total"
-    FROM "contents" AS "tbl_total_i"
-    WHERE tbl_total_i.flag = #{FLAG_NORMAL}
-  ) AS "tbl_total"
-  ,(SELECT COUNT(*) AS "cnt_target"
-    FROM "contents" AS "tbl_target_i"
-    WHERE tbl_target_i.flag = #{FLAG_NORMAL}
-      AND tbl_target_i.recent_clock < :criterion_clock
-      AND tbl_target_i.view_count = (
-        SELECT MIN(tbl_minview_2.view_count)
-        FROM "contents" AS "tbl_minview_2"
-        WHERE tbl_minview_2.flag = #{FLAG_NORMAL}
-      )
-  ) AS "tbl_target"
-WHERE c.flag = #{FLAG_NORMAL}
-  AND c.ids256 = :ids256;
+#{SQL_WITH_CLAUSE}
+SELECT *
+FROM "t_contents"
+WHERE ids256 = :ids256;
 EOF_SQL
 
 
@@ -425,37 +426,37 @@ class FrRandView
     end
   end
 
-  def show_info(_entry = Hash.new(), _show_mode = '', _score = 1)
+  def show_info(_entry = Hash.new(), _show_mode = '', _content_score = 1, _target_score = 1)
     @cons.clear_screen    unless @debug_mode
     pp _entry             if @debug_mode
 
-    if _entry['score'] == _score then
+    _show_mode = "ランダム閲覧: (対象スコア #{_target_score} 以上)"   if _show_mode.nil? || _show_mode.empty?
+    if _entry['score'] == _content_score then
       _score_str = _entry['score'].to_s
     else
       _score_str = _entry['score'].to_s \
-        << ' → ' \
-        << _score.to_s
+        << ' → ' << _content_score.to_s
     end
-    puts ''
-    puts '閲覧モード   : ' << _show_mode
-    puts 'ファイル数   :  閲覧済 / 閲覧対象 / 全体総数'
-    printf "    全体総数 : %7d : %8d : %8d\n",                 \
-      _entry['cnt_leaved_whole'] + 1,                           \
-      _entry['cnt_leaved_whole'] + _entry['cnt_remain_whole'],  \
+    puts   ''
+    puts   '閲覧モード   : ' << _show_mode
+    puts   'ファイル数   :  閲覧済 / 閲覧対象 / 全体総数'
+    printf "    全体総数 : %7d : %8d : %8d\n",  \
+      _entry['cnt_leaved_remainflag'] + 1,      \
+      _entry['cnt_leaved_remainflag'] + _entry['cnt_remain_remainflag'],  \
       _entry['cnt_whole']
-    printf "  対象スコア : %7d : %8d : %8d\n",                   \
-      _entry['cnt_leaved_scored'] + 1,                            \
-      _entry['cnt_leaved_scored'] + _entry['cnt_remain_scored'],  \
-      _entry['cnt_scored']
-    printf "  個別スコア : %7d : %8d : %8d\n",                             \
-      _entry['cnt_leaved_by_score_vc'] + 1,                                 \
-      _entry['cnt_leaved_by_score_vc'] + _entry['cnt_remain_by_score_vc'],  \
-      _entry['cnt_all_by_score']
-    puts '作品タイトル : ' << File.basename(File.dirname(_entry['relpath']))
-    puts '書名         : ' << _entry['filename']
-    puts 'スコア       : ' << _score_str
-    puts '閲覧回数     : ' << _entry['view_count'].to_s
-    puts ''
+    printf "  対象スコア : %7d : %8d : %8d\n",  \
+      _entry['sum_leaved_by_score'] + 1,        \
+      _entry['sum_leaved_by_score'] + _entry['sum_remain_by_score'],  \
+      _entry['sum_by_score']
+    printf "  個別スコア : %7d : %8d : %8d\n",      \
+      _entry['cnt_leaved_remainflag_by_score'] + 1, \
+      _entry['cnt_leaved_remainflag_by_score'] + _entry['cnt_remain_remainflag_by_score'],  \
+      _entry['cnt_remainflag_by_score']
+    puts   '作品タイトル : ' << File.basename(File.dirname(_entry['relpath']))
+    puts   '書名         : ' << _entry['filename']
+    puts   'スコア       : ' << _score_str
+    puts   '閲覧回数     : ' << _entry['view_count'].to_s
+    puts   ''
   end
 
   def view_rand()
@@ -478,10 +479,11 @@ class FrRandView
             # get and process random one target file
             _clause = Hash.new()
             _clause.store(:criterion_clock, _criterion_clock)
+            _clause.store(:target_score, _target_score)
             if _proc_mode.include?(PROCESS_SHOW_PREV) \
               and _recent_lst.length >= _recent_idx then
               _recent_idx = [_recent_lst.length, _recent_idx.succ].min
-              _show_mode = 'Specified: ' << [_recent_idx, '/', _recent_lst.length].join(' ')
+              _show_mode = '指定コンテンツ参照: ' << [_recent_idx, '/', _recent_lst.length].join(' ')
               _proc_mode.delete(PROCESS_SHOW_PREV)
               _proc_mode.push(PROCESS_SHOW_NEXT)
               _sql = SQL_CONTENTS_SPECIFIED
@@ -489,33 +491,29 @@ class FrRandView
             elsif _proc_mode.include?(PROCESS_SHOW_NEXT) \
               and _recent_idx > 1 then
               _recent_idx = [0, _recent_idx.pred].max
-              _show_mode = 'Specified: ' << [_recent_idx, '/', _recent_lst.length].join(' ')
+              _show_mode = '指定コンテンツ参照: ' << [_recent_idx, '/', _recent_lst.length].join(' ')
               _proc_mode.delete(PROCESS_SHOW_PREV)
               _proc_mode.push(PROCESS_SHOW_NEXT)
               _sql = SQL_CONTENTS_SPECIFIED
               _clause.store(:ids256, _recent_lst[_recent_idx.pred])
             else
               _recent_idx = [0, _recent_idx.pred].max
-              _show_mode = "ランダム閲覧: (対象スコア #{_target_score} 以上)"
+              _show_mode = nil
               _sql = SQL_CONTENTS_RANDOM
-              _clause.store(:score, _target_score)
             end
-            [PROCESS_IMMEDIATE, PROCESS_BREAK, PROCESS_SCORE_INC, PROCESS_SCORE_DEC].each {|_proc|
+            [ PROCESS_IMMEDIATE, PROCESS_BREAK,
+              PROCESS_SCORE_INC, PROCESS_SCORE_DEC,
+              PROCESS_REMOVE, ].each {|_proc|
               _proc_mode.delete(_proc)
             }
             _listdb.execute(_sql, _clause).each {|_entry|
               # block per random one target file
-              _score = _entry['score']
+              _content_score = _entry['score']
               unless _clause.has_key?(:ids256) then
                 _recent_lst.unshift(_entry['ids256'])
                 _recent_lst = _recent_lst.shift(10)
               end
-              unless ((_entry['cnt_remain_whole']  > 1) \
-                and (_entry['cnt_remain_scored']   > 1) \
-                and (_entry['cnt_remain_by_score'] > 1)) then
-                _criterion_clock = _criterion_clock.succ
-              end
-              show_info(_entry, _show_mode, _score)
+              show_info(_entry, _show_mode, _content_score, _target_score)
 
               _st_clock = Time.now.to_i
               system(APP_VIEWER, *[File.join(PATH_MEDIA, _entry['relpath'])])
@@ -565,8 +563,8 @@ class FrRandView
                     _proc_mode.push(PROCESS_SHOW_NEXT)
                     _proc_mode.push(PROCESS_IMMEDIATE)
                   end
-                  _proc_mode.push(PROCESS_SCORE_DEC)    if _score == RANGE_SCORE.first
-                  _score = [_score.pred, RANGE_SCORE.first].max
+                  _proc_mode.push(PROCESS_SCORE_DEC)    if _content_score == RANGE_SCORE.first
+                  _content_score = [_content_score.pred, RANGE_SCORE.first].max
                 when  *["\u002b",       '+',          # '+'
                         "\u0058",       'X',          # 'X'
                         "\u0078",       'x',  ] then  # 'x'
@@ -577,20 +575,18 @@ class FrRandView
                     _proc_mode.push(PROCESS_SHOW_NEXT)
                     _proc_mode.push(PROCESS_IMMEDIATE)
                   end
-                  _proc_mode.push(PROCESS_SCORE_INC)    if _score == RANGE_SCORE.last
-                  _score = [_score.succ, RANGE_SCORE.last].min
+                  _proc_mode.push(PROCESS_SCORE_INC)    if _content_score == RANGE_SCORE.last
+                  _content_score = [_content_score.succ, RANGE_SCORE.last].min
                 when  *["\u003c",       '<',  ] then  # '<'
                   _target_score = [_target_score.pred, RANGE_SCORE.first].max
-                  _proc_mode.push(PROCESS_IMMEDIATE)
                 when  *["\u003e",       '>',  ] then  # '>'
                   _target_score = [_target_score.succ, RANGE_SCORE.last].min
-                  _proc_mode.push(PROCESS_IMMEDIATE)
                 else                            # Other keys
                   if (0x01 .. (?Z.ord - ?A.ord)).cover?(_input_byte) then
                     _input_print = 'Ctrl-' << [_input_byte + 0x40].pack('C*')
                   end
                 end
-                show_info(_entry, _show_mode, _score)
+                show_info(_entry, _show_mode, _content_score, _target_score)
                 puts "Input: #{_input_binstr}, '#{_input_print}'"
                 puts ''
                 break if _proc_mode.include?(PROCESS_IMMEDIATE)
@@ -598,12 +594,12 @@ class FrRandView
               end
 
               _listdb.execute(SQL_CONTENTS_UPDATE_REFDATA,
-                :ids256       => _entry['ids256'],
-                :view_count   => (_clause.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ),
-                :recent_clock => _st_clock,
-                :elapsed_sec  => [_ed_clock - _st_clock, ELAPSED_LIMIT].min,
-                :score        => _score,
-                :flag         => (_proc_mode.include?(PROCESS_REMOVE) ? 1 : 0),
+                :ids256         => _entry['ids256'],
+                :view_count     => (_clause.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ),
+                :recent_clock   => _st_clock,
+                :elapsed_sec    => [_ed_clock - _st_clock, ELAPSED_LIMIT].min,
+                :content_score  => _content_score,
+                :flag           => (_proc_mode.include?(PROCESS_REMOVE) ? 1 : 0),
               )
             }
             break if _proc_mode.include?(PROCESS_BREAK)
