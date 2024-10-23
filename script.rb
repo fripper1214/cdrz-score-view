@@ -237,18 +237,15 @@ WITH
     GROUP BY score)
   ,"v_sum_by_score" AS (
     SELECT e.score_remainflag_by_score AS "score_sum_by_score"
-      ,(SELECT SUM(av.cnt_remainflag_by_score)
-        FROM "v_remainflag_by_score" AS av
-        WHERE av.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_by_score"
-      ,(SELECT SUM(lv.cnt_leaved_remainflag_by_score)
-        FROM "v_remainflag_by_score" AS lv
-        WHERE lv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_leaved_by_score"
-      ,(SELECT SUM(rv.cnt_remain_remainflag_by_score)
-        FROM "v_remainflag_by_score" AS rv
-        WHERE rv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_remain_by_score"
-      ,(SELECT SUM(lv.cnt_prvmax_remainflag_by_score)
-        FROM "v_remainflag_by_score" AS lv
-        WHERE lv.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_prvmax_by_score"
+      ,(SELECT SUM(v1.cnt_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS v1
+        WHERE v1.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_by_score"
+      ,(SELECT SUM(v2.cnt_leaved_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS v2
+        WHERE v2.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_leaved_by_score"
+      ,(SELECT SUM(v3.cnt_remain_remainflag_by_score)
+        FROM "v_remainflag_by_score" AS v3
+        WHERE v3.score_remainflag_by_score >= e.score_remainflag_by_score) AS "sum_remain_by_score"
     FROM "v_remainflag_by_score" as e
     WHERE e.score_remainflag_by_score = :target_score)
   ,"t_contents" AS (
