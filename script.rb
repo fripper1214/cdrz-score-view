@@ -272,11 +272,23 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
       AND t.score
         BETWEEN MAX(v.lscore_whole, :score_min)
             AND MIN(v.hscore_whole, :score_max))
-SELECT *
-FROM "t_scored"
-LIMIT 1
-OFFSET ABS(RANDOM()) % MAX((
-  SELECT COUNT(1) FROM "t_scored"), 1);
+  ,"l_scored" AS (
+    SELECT t1.score AS "l_score", t1.ids256 AS "l_ids256"
+    FROM "t_scored" AS "t1"
+    UNION ALL
+    SELECT t2.l_score - 1, t2.l_ids256
+    FROM "l_scored" AS "t2"
+    WHERE t2.l_score > 1
+      AND t2.l_ids256 = l_ids256)
+  ,"r_scored" AS (
+    SELECT l.*
+    FROM "l_scored" AS "l"
+    LIMIT 1
+    OFFSET ABS(RANDOM()) % MAX((
+    SELECT COUNT(1) FROM "l_scored"), 1))
+SELECT t.*
+FROM "t_scored" AS "t", "r_scored" AS "r"
+WHERE t.ids256 = r.l_ids256;
 EOF_SQL
 
 SQL_CONTENTS_SPECIFIED  = <<-"EOF_SQL"
