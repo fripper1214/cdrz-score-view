@@ -293,9 +293,9 @@ EOF_SQL
 
 SQL_CONTENTS_SPECIFIED  = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
-SELECT *
-FROM "t_contents"
-WHERE ids256 = :ids256;
+SELECT t.*
+FROM "t_contents" AS "t"
+WHERE t.ids256 = :ids256;
 EOF_SQL
 
 
