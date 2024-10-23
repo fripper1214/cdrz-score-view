@@ -262,6 +262,12 @@ WITH
       AND score = score_remainflag_by_score)
 EOF_SQL
 
+SQL_CONTENTS_GET_VCINFO = <<-"EOF_SQL"
+#{SQL_WITH_CLAUSE}
+SELECT *
+FROM "v_whole_by_score"
+EOF_SQL
+
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
   ,"t_scored" AS (
@@ -428,31 +434,27 @@ class FrRandView
     pp _entry             if @debug_mode
 
     _show_mode = "ランダム閲覧: (対象スコア #{_target_score} 以上)"   if _show_mode.nil? || _show_mode.empty?
-    if _entry['score'] == _content_score then
-      _score_str = _entry['score'].to_s
-    else
-      _score_str = _entry['score'].to_s \
-        << ' → ' << _content_score.to_s
-    end
+    _score_str = _entry['score'].to_s
+    _score_str << ' → ' << _content_score.to_s   if _entry['score'] != _content_score
     puts   ''
-    puts   '閲覧モード   : ' << _show_mode
-    puts   'ファイル数   :  閲覧済 / 閲覧対象 / 全体総数'
-    printf "    全体総数 : %7d : %8d : %8d\n",  \
+    puts   '閲覧モード      : ' << _show_mode
+    puts   'ファイル数      :  閲覧済 / 閲覧対象 / 全体総数'
+    printf "    全体総数    : %7d : %8d : %8d\n",  \
       _entry['cnt_leaved_remainflag'] + 1,      \
       _entry['cnt_leaved_remainflag'] + _entry['cnt_remain_remainflag'],  \
       _entry['cnt_whole']
-    printf "  対象スコア : %7d : %8d : %8d\n",  \
+    printf "  対象スコア    : %7d : %8d : %8d\n",  \
       _entry['sum_leaved_by_score'] + 1,        \
       _entry['sum_leaved_by_score'] + _entry['sum_remain_by_score'],  \
       _entry['sum_by_score']
-    printf "  個別スコア : %7d : %8d : %8d\n",      \
+    printf "  個別スコア    : %7d : %8d : %8d\n",      \
       _entry['cnt_leaved_remainflag_by_score'] + 1, \
       _entry['cnt_leaved_remainflag_by_score'] + _entry['cnt_remain_remainflag_by_score'],  \
       _entry['cnt_remainflag_by_score']
-    puts   '作品タイトル : ' << File.basename(File.dirname(_entry['relpath']))
-    puts   '書名         : ' << _entry['filename']
-    puts   'スコア       : ' << _score_str
-    puts   '閲覧回数     : ' << _entry['view_count'].to_s
+    puts   '作品タイトル    : ' << File.basename(File.dirname(_entry['relpath']))
+    puts   '書名            : ' << _entry['filename']
+    puts   'スコア          : ' << _score_str
+    puts   '閲覧回数 / 時間 : ' << _entry['view_count'].to_s << ' 回 / ' << _entry['elapsed_sec'].to_s << ' 秒'
     puts   ''
   end
 
@@ -503,9 +505,17 @@ class FrRandView
               PROCESS_REMOVE, ].each {|_proc|
               _proc_mode.delete(_proc)
             }
+
+            _vcinfo = Hash.new()
+            _listdb.execute(SQL_CONTENTS_GET_VCINFO).each {|_entry|
+              _vcinfo.store(_entry['score_whole_by_score'], Hash.new())                       unless _vcinfo.has_key?(_entry['score_whole_by_score'])
+              _vcinfo[_entry['score_whole_by_score']].store(:min, _entry['min_vc_by_score'])  unless _vcinfo[_entry['score_whole_by_score']].has_key?(:min)
+              _vcinfo[_entry['score_whole_by_score']].store(:max, _entry['max_vc_by_score'])  unless _vcinfo[_entry['score_whole_by_score']].has_key?(:max)
+            }
             _listdb.execute(_sql, _clause).each {|_entry|
               # block per random one target file
               _content_score = _entry['score']
+              _view_count    = _entry['view_count']
               unless _clause.has_key?(:ids256) then
                 _recent_lst.unshift(_entry['ids256'])
                 _recent_lst = _recent_lst.shift(10)
@@ -591,9 +601,14 @@ class FrRandView
                 break if _proc_mode.include?(PROCESS_BREAK)
               end
 
+              if _entry['score'] == _content_score then
+                _view_count = _clause.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ
+              elsif _vcinfo.has_key?(_content_score) && _vcinfo[_content_score].has_key?(:min)
+                _view_count = _vcinfo[_content_score][:min]
+              end
               _listdb.execute(SQL_CONTENTS_UPDATE_REFDATA,
                 :ids256         => _entry['ids256'],
-                :view_count     => (_clause.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ),
+                :view_count     => _view_count,
                 :recent_clock   => _st_clock,
                 :elapsed_sec    => [_ed_clock - _st_clock, ELAPSED_LIMIT].min,
                 :content_score  => _content_score,
