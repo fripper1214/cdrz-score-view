@@ -28,7 +28,8 @@ INTERVAL_SECOND = 2.55
 ENUM_FILES_STEP = 100
 ELAPSED_LIMIT   = 100
 WHITE_LIST_EXT  = ['zip']
-RANGE_SCORE     = 1..10
+SCORE_RANGE     = 1..10
+SCORE_INITIAL   = 2
 HISTORY_LIMIT   = 10
 
 PROCESS_IMMEDIATE = 0
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS "contents" (
   "view_count"    INTEGER NOT NULL  DEFAULT 0,
   "recent_clock"  INTEGER NOT NULL  DEFAULT 0,
   "elapsed_sec"   INTEGER NOT NULL  DEFAULT 0,
-  "score"         INTEGER NOT NULL  DEFAULT #{RANGE_SCORE.first},
+  "score"         INTEGER NOT NULL  DEFAULT #{SCORE_INITIAL},
   "flag"          INTEGER NOT NULL  DEFAULT #{FLAG_NORMAL},
   PRIMARY KEY("ids256")
 );
@@ -413,8 +414,8 @@ class FrRandView
             :flag_target  => FLAG_FLAGGED,
           )
         }
-        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MIN, :limit => RANGE_SCORE.first)
-        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MAX, :limit => RANGE_SCORE.last)
+        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MIN, :limit => SCORE_RANGE.first)
+        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MAX, :limit => SCORE_RANGE.last)
         _listdb.execute(SQL_CONTENTS_INIT_RECENT_CLOCK, :recent_clock => Time.now.to_i)
       rescue => e
         _listdb.rollback  if _listdb.transaction_active?
@@ -570,8 +571,8 @@ class FrRandView
                     _proc_mode.push(PROCESS_SHOW_NEXT)
                     _proc_mode.push(PROCESS_IMMEDIATE)
                   end
-                  _proc_mode.push(PROCESS_SCORE_DEC)    if @score_newval == RANGE_SCORE.first
-                  @score_newval = [@score_newval.pred, RANGE_SCORE.first].max
+                  _proc_mode.push(PROCESS_SCORE_DEC)    if @score_newval == SCORE_RANGE.first
+                  @score_newval = [@score_newval.pred, SCORE_RANGE.first].max
                 when  *["\u002b",       '+',          # '+'
                         "\u0058",       'X',          # 'X'
                         "\u0078",       'x',  ] then  # 'x'
@@ -582,22 +583,22 @@ class FrRandView
                     _proc_mode.push(PROCESS_SHOW_NEXT)
                     _proc_mode.push(PROCESS_IMMEDIATE)
                   end
-                  _proc_mode.push(PROCESS_SCORE_INC)    if @score_newval == RANGE_SCORE.last
-                  @score_newval = [@score_newval.succ, RANGE_SCORE.last].min
+                  _proc_mode.push(PROCESS_SCORE_INC)    if @score_newval == SCORE_RANGE.last
+                  @score_newval = [@score_newval.succ, SCORE_RANGE.last].min
                 when  *["\u0056",       'V',          # 'V'
                         "\u0076",       'v',  ] then  # 'v'
-                  @score_llimit = [@score_llimit.pred, RANGE_SCORE.first].max
+                  @score_llimit = [@score_llimit.pred, SCORE_RANGE.first].max
                 when  *["\u0042",       'B',          # 'B'
                         "\u0062",       'b',  ] then  # 'b'
-                  @score_llimit = [@score_llimit.succ, RANGE_SCORE.last].min
+                  @score_llimit = [@score_llimit.succ, SCORE_RANGE.last].min
                   @score_hlimit = @score_llimit   if @score_llimit > @score_hlimit
                 when  *["\u004e",       'N',          # 'N'
                         "\u006e",       'n',  ] then  # 'n'
-                  @score_hlimit = [@score_hlimit.pred, RANGE_SCORE.first].max
+                  @score_hlimit = [@score_hlimit.pred, SCORE_RANGE.first].max
                   @score_llimit = @score_hlimit   if @score_llimit > @score_hlimit
                 when  *["\u004d",       'M',          # 'M'
                         "\u006d",       'm',  ] then  # 'm'
-                  @score_hlimit = [@score_hlimit.succ, RANGE_SCORE.last].min
+                  @score_hlimit = [@score_hlimit.succ, SCORE_RANGE.last].min
                 else                            # Other keys
                   if (0x01 .. (?Z.ord - ?A.ord)).cover?(_input_byte) then
                     _input_print = 'Ctrl-' << [_input_byte + 0x40].pack('C*')
@@ -643,9 +644,9 @@ class FrRandView
 
   def initialize()
     @debug_mode   = false
-    @score_llimit = RANGE_SCORE.first
-    @score_hlimit = RANGE_SCORE.last
-    @score_newval = 1
+    @score_llimit = SCORE_RANGE.first
+    @score_hlimit = SCORE_RANGE.last
+    @score_newval = SCORE_INITIAL
     @history_idx  = 0
     @history_lst  = Array.new()
   end
