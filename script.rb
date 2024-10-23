@@ -544,6 +544,7 @@ class FrRandView
                   _input_print = '[Delete]'
                 when  *["\u0020", "\s", ' ',  ] then  # Space
                   _proc_mode.push(PROCESS_IMMEDIATE)
+                  _input_print = '[Space]'
                 when  *["\u0044",       'D',          # 'D'
                         "\u0064",       'd',  ] then  # 'd'
                   _proc_mode.push(PROCESS_REMOVE)
