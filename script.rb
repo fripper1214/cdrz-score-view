@@ -200,24 +200,26 @@ WITH
     SELECT t.*
       ,(CASE WHEN t.view_count < v.bvc_by_score
         THEN 1 ELSE NULL END) AS "vcflag"
-    FROM "t_whole" AS "t", "v_whole_by_score" AS "v"
+    FROM "t_whole" AS "t"
+      ,"v_whole_by_score" AS "v"
     WHERE t.score = v.score_whole_by_score)
   ,"v_vcflag_by_score" AS (
     SELECT t.score AS "score_vcflag_by_score"
       ,COUNT(1) AS "cnt_vcflag_by_score"
       ,MIN(t.recent_clock) AS "lclk_vcflag_by_score"
       ,MAX(t.recent_clock) AS "hclk_vcflag_by_score"
-      ,(CASE WHEN MIN(t.recent_clock) > :criterion_clock
-        THEN MAX(t.recent_clock) + 1
+      ,(CASE WHEN MIN(t.recent_clock) >= :criterion_clock
+        THEN :criterion_clock - 1
         ELSE :criterion_clock END) AS "bclk_vcflag_by_score"
     FROM "t_vcflag" AS "t"
     WHERE t.vcflag = 1
     GROUP BY t.score)
   ,"t_remainflag" AS (
     SELECT t.*
-      ,(CASE WHEN t.recent_clock < v.bclk_vcflag_by_score
+      ,(CASE WHEN t.recent_clock <= v.bclk_vcflag_by_score
         THEN 1 ELSE NULL END) AS "remainflag"
-    FROM "t_vcflag" AS "t", "v_vcflag_by_score" AS "v"
+    FROM "t_vcflag" AS "t"
+      ,"v_vcflag_by_score" AS "v"
     WHERE t.score = v.score_vcflag_by_score)
   ,"v_remainflag" AS (
     SELECT COUNT(1) AS "cnt_total_remainflag"
@@ -241,7 +243,8 @@ WITH
       ,SUM(v.cnt_remain_remainflag_by_score) AS "sum_remain_by_score"
     FROM "v_remainflag_by_score" as "v"
     WHERE v.score_remainflag_by_score
-      BETWEEN :score_min AND :score_max)
+      BETWEEN :score_min
+          AND :score_max)
   ,"t_contents" AS (
     SELECT *
     FROM "t_remainflag"
@@ -266,7 +269,8 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
   ,"t_scored" AS (
     SELECT t.*
-    FROM "t_contents" AS "t", "v_whole" AS "v"
+    FROM "t_contents" AS "t"
+      ,"v_whole" AS "v"
     WHERE t.remainflag = 1
       AND t.vcflag = 1
       AND t.score
@@ -287,7 +291,8 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
     OFFSET ABS(RANDOM()) % MAX((
     SELECT COUNT(1) FROM "l_scored"), 1))
 SELECT t.*
-FROM "t_scored" AS "t", "r_scored" AS "r"
+FROM "t_scored" AS "t"
+  ,"r_scored" AS "r"
 WHERE t.ids256 = r.l_ids256;
 EOF_SQL
 
