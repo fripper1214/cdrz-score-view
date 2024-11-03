@@ -181,65 +181,65 @@ WITH
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
   ,"v_whole" AS (
-    SELECT COUNT(1) AS "cnt_whole"
-      ,MIN(t.score) AS "lscore_whole"
-      ,MAX(t.score) AS "hscore_whole"
+    SELECT COUNT(1) AS "count_whole"
+      ,MIN(t.score) AS "score_lo_whole"
+      ,MAX(t.score) AS "score_hi_whole"
     FROM "t_whole" AS "t")
   ,"v_whole_by_score" AS (
     SELECT t.score AS "score_whole_by_score"
-      ,COUNT(1) AS "cnt_whole_by_score"
-      ,MIN(t.view_count) AS "lvc_by_score"
-      ,MAX(t.view_count) AS "hvc_by_score"
+      ,COUNT(1) AS "count_whole_by_score"
+      ,MIN(t.view_count) AS "view_count_lo_whole_by_score"
+      ,MAX(t.view_count) AS "view_count_hi_whole_by_score"
       ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
         THEN MAX(t.view_count) + 1
-        ELSE MAX(t.view_count) END) AS "bvc_by_score"
+        ELSE MAX(t.view_count) END) AS "view_count_bl_whole_by_score"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
   ,"t_vcflag" AS (
     SELECT t.*
-      ,(CASE WHEN t.view_count < v.bvc_by_score
+      ,(CASE WHEN t.view_count < v.view_count_bl_whole_by_score
         THEN 1 ELSE NULL END) AS "vcflag"
     FROM "t_whole" AS "t"
       ,"v_whole_by_score" AS "v"
     WHERE t.score = v.score_whole_by_score)
   ,"v_vcflag_by_score" AS (
     SELECT t.score AS "score_vcflag_by_score"
-      ,COUNT(1) AS "cnt_vcflag_by_score"
-      ,MIN(t.recent_clock) AS "lclk_vcflag_by_score"
-      ,MAX(t.recent_clock) AS "hclk_vcflag_by_score"
-      ,(CASE WHEN MIN(t.recent_clock) >= :criterion_clock
-        THEN :criterion_clock - 1
-        ELSE :criterion_clock END) AS "bclk_vcflag_by_score"
+      ,COUNT(1) AS "count_vcflag_by_score"
+      ,MIN(t.recent_clock) AS "recent_clock_lo_vcflag_by_score"
+      ,MAX(t.recent_clock) AS "recent_clock_hi_vcflag_by_score"
+      ,(CASE WHEN MIN(t.recent_clock) < :criterion_clock
+        THEN :criterion_clock
+        ELSE CAST(AVG(t.recent_clock) AS int) END) AS "recent_clock_bl_vcflag_by_score"
     FROM "t_vcflag" AS "t"
     WHERE t.vcflag = 1
     GROUP BY t.score)
   ,"t_remainflag" AS (
     SELECT t.*
-      ,(CASE WHEN t.recent_clock <= v.bclk_vcflag_by_score
+      ,(CASE WHEN t.recent_clock < v.recent_clock_bl_vcflag_by_score
         THEN 1 ELSE NULL END) AS "remainflag"
     FROM "t_vcflag" AS "t"
       ,"v_vcflag_by_score" AS "v"
     WHERE t.score = v.score_vcflag_by_score)
   ,"v_remainflag" AS (
-    SELECT COUNT(1) AS "cnt_total_remainflag"
+    SELECT COUNT(1) AS "count_total_remainflag"
       ,COUNT(CASE WHEN t.remainflag IS NULL
-        THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag"
+        THEN 1 ELSE NULL END) AS "count_leaved_remainflag"
       ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
-        THEN 1 ELSE NULL END) AS "cnt_remain_remainflag"
+        THEN 1 ELSE NULL END) AS "count_remain_remainflag"
     FROM "t_remainflag" AS "t")
   ,"v_remainflag_by_score" AS (
     SELECT t.score AS "score_remainflag_by_score"
-      ,COUNT(1) AS "cnt_total_remainflag_by_score"
+      ,COUNT(1) AS "count_total_remainflag_by_score"
       ,COUNT(CASE WHEN t.remainflag IS NULL
-        THEN 1 ELSE NULL END) AS "cnt_leaved_remainflag_by_score"
+        THEN 1 ELSE NULL END) AS "count_leaved_remainflag_by_score"
       ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
-        THEN 1 ELSE NULL END) AS "cnt_remain_remainflag_by_score"
+        THEN 1 ELSE NULL END) AS "count_remain_remainflag_by_score"
     FROM "t_remainflag" AS "t"
     GROUP BY t.score)
   ,"v_sum_by_score" AS (
-    SELECT SUM(v.cnt_total_remainflag_by_score) AS "sum_total_by_score"
-      ,SUM(v.cnt_leaved_remainflag_by_score) AS "sum_leaved_by_score"
-      ,SUM(v.cnt_remain_remainflag_by_score) AS "sum_remain_by_score"
+    SELECT SUM(v.count_total_remainflag_by_score) AS "sum_total_remainflag_by_score"
+      ,SUM(v.count_leaved_remainflag_by_score) AS "sum_leaved_remainflag_by_score"
+      ,SUM(v.count_remain_remainflag_by_score) AS "sum_remain_remainflag_by_score"
     FROM "v_remainflag_by_score" as "v"
     WHERE v.score_remainflag_by_score
       BETWEEN :score_min
@@ -273,8 +273,8 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
     WHERE t.remainflag = 1
       AND t.vcflag = 1
       AND t.score
-        BETWEEN MAX(v.lscore_whole, :score_min)
-            AND MIN(v.hscore_whole, :score_max))
+        BETWEEN MAX(v.score_lo_whole, :score_min)
+            AND MIN(v.score_hi_whole, :score_max))
   ,"l_scored" AS (
     SELECT t1.score AS "l_score", t1.ids256 AS "l_ids256"
     FROM "t_scored" AS "t1"
@@ -451,32 +451,40 @@ class FrRandView
     @cons.clear_screen  unless @debug_mode
     pp _entry               if @debug_mode
 
+    _range = Range.new(@score_limit_lo, @score_limit_hi).to_s
+    _score = _entry['score'].to_s
+    _score << ' → ' << @score_modified.to_s  if _entry['score'] != @score_modified
+
     if @history_index > 0 then
       _view_mode = '直近履歴コンテンツ閲覧: (' << [@history_index, '/', @history.length].join('') << ')'
     else
-      _view_mode = 'スコア範囲ランダム閲覧: (' << [@score_limit_lo, '..', @score_limit_hi].join('') << ')'
+      _view_mode = 'スコア範囲ランダム閲覧: (' << _range << ')'
     end
-    _score_str = _entry['score'].to_s
-    _score_str << ' → ' << @score_modified.to_s  if _entry['score'] != @score_modified
+
+    _pad1 = _range.length - _entry['score'].to_s.length - 2
+    _pad2 = _range.length - 4
+
     puts   ''
-    puts   '閲覧モード   : ' << _view_mode
-    puts   'ファイル数   : 閲覧済 / 閲覧対象 / 全体総数'
-    printf "    全体総数 : %6d : %8d : %8d\n",  \
-      _entry['cnt_leaved_remainflag'] + 1,  \
-      _entry['cnt_leaved_remainflag'] + _entry['cnt_remain_remainflag'],  \
-      _entry['cnt_whole']
-    printf "  対象スコア : %6d : %8d : %8d\n",  \
-      _entry['sum_leaved_by_score'] + 1,  \
-      _entry['sum_leaved_by_score'] + _entry['sum_remain_by_score'],  \
-      _entry['sum_total_by_score']
-    printf "  個別スコア : %6d : %8d : %8d\n",  \
-      _entry['cnt_leaved_remainflag_by_score'] + 1, \
-      _entry['cnt_leaved_remainflag_by_score'] + _entry['cnt_remain_remainflag_by_score'],  \
-      _entry['cnt_total_remainflag_by_score']
-    puts   '作品タイトル : ' << File.basename(File.dirname(_entry['relpath']))
-    puts   '書名         : ' << _entry['filename']
-    puts   'スコア       : ' << _score_str
-    puts   '閲覧回数時間 : ' << [_entry['view_count'], '回', '/', _entry['elapsed_sec'], '秒'].join(' ')
+    puts   (' ' * _pad2) << '      閲覧モード : ' << _view_mode
+    puts   (' ' * _pad2) << '      ファイル数 : 閲覧済 / 閲覧対象 / 全体総数'
+    printf (' ' * _pad2) << "        全体総数 : %6d : %8d : %8d\n", \
+      _entry['count_leaved_remainflag'] + 1, \
+      _entry['count_leaved_remainflag'] + _entry['count_remain_remainflag'], \
+      _entry['count_whole']
+    printf "スコア範囲(%s) : %6d : %8d : %8d\n", \
+      _range, \
+      _entry['sum_leaved_remainflag_by_score'] + 1, \
+      _entry['sum_leaved_remainflag_by_score'] + _entry['sum_remain_remainflag_by_score'], \
+      _entry['sum_total_remainflag_by_score']
+    printf (' ' * _pad1) << "  個別スコア(%d) : %6d : %8d : %8d\n", \
+      _entry['score'], \
+      _entry['count_leaved_remainflag_by_score'] + 1, \
+      _entry['count_leaved_remainflag_by_score'] + _entry['count_remain_remainflag_by_score'], \
+      _entry['count_total_remainflag_by_score']
+    puts   (' ' * _pad2) << '元作品タイトル名 : ' << File.basename(File.dirname(_entry['relpath']))
+    puts   (' ' * _pad2) << '  コンテンツ書名 : ' << _entry['filename']
+    puts   (' ' * _pad2) << '          スコア : ' << _score
+    puts   (' ' * _pad2) << '    閲覧回数時間 : ' << [_entry['view_count'], '回', '/', _entry['elapsed_sec'], '秒'].join(' ')
     puts   ''
   end
 
@@ -489,8 +497,8 @@ class FrRandView
       begin
         _listdb.results_as_hash = true
         begin
-          _process_mode     = Array.new()     # 処理の制御情報
-          _criterion_clock  = Time.now.to_i   # 表示処理の開始時刻
+          _process_mode     = Array.new()         # 処理の制御情報
+          _criterion_clock  = Time.now.to_i - 1   # 表示ループ処理の開始時刻
 
           # メインループ処理
           loop do
@@ -500,8 +508,8 @@ class FrRandView
               _view_count_info.store(
                 _entry['score_whole_by_score'],
                 Range.new(
-                  _entry['lvc_by_score'],
-                  _entry['hvc_by_score']
+                  _entry['view_count_lo_whole_by_score'],
+                  _entry['view_count_hi_whole_by_score']
                 )
               )
             }
@@ -521,7 +529,7 @@ class FrRandView
 
             # SQL 句に指定するパラメータ情報を格納するハッシュを生成
             _clauses = Hash.new()
-            _clauses.store(:criterion_clock,  _criterion_clock)   # 表示処理の開始時刻
+            _clauses.store(:criterion_clock,  _criterion_clock)   # 表示ループ処理の開始時刻
             _clauses.store(:score_min,        @score_limit_lo)    # 対象スコア範囲
             _clauses.store(:score_max,        @score_limit_hi)
 
@@ -554,9 +562,9 @@ class FrRandView
               show_info(_entry)
 
               # 表示処理を実行
-              _st_clock = Time.now.to_i
+              _view_start = Time.now.to_i
               system(APP_VIEWER, *[File.join(PATH_MEDIA, _entry['relpath'])])
-              _ed_clock = Time.now.to_i
+              _view_end = Time.now.to_i
 
               # 表示終了後のキー操作をリアルタイムでコンソール処理
               #   echoback-off, unbuffered I/O
@@ -715,14 +723,14 @@ class FrRandView
               # 今回表示していた項目の DB 情報を更新
               _listdb.execute(SQL_CONTENTS_UPDATE_REFDATA,
                 :ids256         => _entry['ids256'],
-                :recent_clock   => _st_clock,
+                :recent_clock   => _view_start,
                 :content_score  => @score_modified,
                 # 表示回数：既存回数に +1 した値を指定
                 #   直近履歴コンテンツ閲覧モードだった場合は同じ値のまま
                 :view_count     => (_clauses.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ),
                 # 表示時間：今回の表示時間を指定、但し ELAPSED_LIMIT 秒を上限とする
                 #   累積値は UPDATE SQL 側で既存値と合算
-                :elapsed_sec    => [_ed_clock - _st_clock, ELAPSED_LIMIT].min,
+                :elapsed_sec    => [_view_end - _view_start, ELAPSED_LIMIT].min,
                 # 削除フラグ値： FLAG_NORMAL or FLAG_FLAGGED
                 :flag           => (_process_mode.include?(PROCESS_REMOVE) ? FLAG_FLAGGED : FLAG_NORMAL),
               )
