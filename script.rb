@@ -190,50 +190,70 @@ WITH
       ,COUNT(1) AS "count_whole_by_score"
       ,MIN(t.view_count) AS "view_count_lo_whole_by_score"
       ,MAX(t.view_count) AS "view_count_hi_whole_by_score"
+      -- 同スコア内で MIN(view_count), MAX(view_count) を比較し
+      -- 同スコア内の view_count が全て同じ値となった場合
+      -- MAX(view_count) + 1 を判断基準値とする
+      -- 通常は MAX(t.view_count) そのものを判断基準値とする
       ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
         THEN MAX(t.view_count) + 1
         ELSE MAX(t.view_count) END) AS "view_count_bl_whole_by_score"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
-  ,"t_vcflag" AS (
+  ,"t_vcountflag" AS (
     SELECT t.*
+      -- view_count が判断基準値 MAX(view_count) 未満の場合のみ
+      -- vcountflag 値として 1 を返す
       ,(CASE WHEN t.view_count < v.view_count_bl_whole_by_score
-        THEN 1 ELSE NULL END) AS "vcflag"
+        THEN #{FLAG_FLAGGED}
+        ELSE NULL END) AS "vcountflag"
     FROM "t_whole" AS "t"
       ,"v_whole_by_score" AS "v"
     WHERE t.score = v.score_whole_by_score)
-  ,"v_vcflag_by_score" AS (
-    SELECT t.score AS "score_vcflag_by_score"
-      ,COUNT(1) AS "count_vcflag_by_score"
-      ,MIN(t.recent_clock) AS "recent_clock_lo_vcflag_by_score"
-      ,MAX(t.recent_clock) AS "recent_clock_hi_vcflag_by_score"
-      ,(CASE WHEN MIN(t.recent_clock) < :criterion_clock
-        THEN :criterion_clock
-        ELSE CAST(AVG(t.recent_clock) AS int) END) AS "recent_clock_bl_vcflag_by_score"
-    FROM "t_vcflag" AS "t"
-    WHERE t.vcflag = 1
+  ,"v_vcountflag_by_score" AS (
+    SELECT t.score AS "score_vcountflag_by_score"
+      ,COUNT(1) AS "count_vcountflag_by_score"
+      ,MIN(t.recent_clock) AS "recent_clock_lo_vcountflag_by_score"
+      ,MAX(t.recent_clock) AS "recent_clock_hi_vcountflag_by_score"
+      -- 同スコア内で vcountflag 対象の項目で MIN(recent_clock) が
+      -- criterion_clock 開始時刻よりも未来寄りの値となった
+      -- 場合のみ AVG(recent_clock) を判断基準値とする
+      -- 通常は criterion_clock そのものを判断基準値とする
+      ,(CASE WHEN MIN(t.recent_clock) >= :criterion_clock
+        THEN CAST(AVG(t.recent_clock) AS int)
+        ELSE :criterion_clock END) AS "recent_clock_bl_vcountflag_by_score"
+    FROM "t_vcountflag" AS "t"
+    WHERE t.vcountflag = #{FLAG_FLAGGED}
     GROUP BY t.score)
   ,"t_remainflag" AS (
     SELECT t.*
-      ,(CASE WHEN t.recent_clock < v.recent_clock_bl_vcflag_by_score
-        THEN 1 ELSE NULL END) AS "remainflag"
-    FROM "t_vcflag" AS "t"
-      ,"v_vcflag_by_score" AS "v"
-    WHERE t.score = v.score_vcflag_by_score)
+      -- recent_clock が判断基準値 criterion_clock よりも
+      -- 過去寄りの値となった場合のみ remainflag 値として 1 を返す
+      ,(CASE WHEN t.recent_clock < v.recent_clock_bl_vcountflag_by_score
+        THEN #{FLAG_FLAGGED}
+        ELSE NULL END) AS "remainflag"
+    FROM "t_vcountflag" AS "t"
+      ,"v_vcountflag_by_score" AS "v"
+    WHERE t.score = v.score_vcountflag_by_score)
   ,"v_remainflag" AS (
     SELECT COUNT(1) AS "count_total_remainflag"
       ,COUNT(CASE WHEN t.remainflag IS NULL
-        THEN 1 ELSE NULL END) AS "count_leaved_remainflag"
-      ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
-        THEN 1 ELSE NULL END) AS "count_remain_remainflag"
+             THEN 1
+             ELSE NULL END) AS "count_leaved_remainflag"
+      ,COUNT(CASE WHEN t.remainflag = #{FLAG_FLAGGED}
+                   AND t.vcountflag = #{FLAG_FLAGGED}
+             THEN 1
+             ELSE NULL END) AS "count_remain_remainflag"
     FROM "t_remainflag" AS "t")
   ,"v_remainflag_by_score" AS (
     SELECT t.score AS "score_remainflag_by_score"
       ,COUNT(1) AS "count_total_remainflag_by_score"
       ,COUNT(CASE WHEN t.remainflag IS NULL
-        THEN 1 ELSE NULL END) AS "count_leaved_remainflag_by_score"
-      ,COUNT(CASE WHEN t.remainflag = 1 AND t.vcflag = 1
-        THEN 1 ELSE NULL END) AS "count_remain_remainflag_by_score"
+             THEN 1
+             ELSE NULL END) AS "count_leaved_remainflag_by_score"
+      ,COUNT(CASE WHEN t.remainflag = #{FLAG_FLAGGED}
+                   AND t.vcountflag = #{FLAG_FLAGGED}
+             THEN 1
+             ELSE NULL END) AS "count_remain_remainflag_by_score"
     FROM "t_remainflag" AS "t"
     GROUP BY t.score)
   ,"v_sum_by_score" AS (
@@ -249,12 +269,12 @@ WITH
     FROM "t_remainflag"
       ,"v_whole"
       ,"v_whole_by_score"
-      ,"v_vcflag_by_score"
+      ,"v_vcountflag_by_score"
       ,"v_remainflag"
       ,"v_remainflag_by_score"
       ,"v_sum_by_score"
     WHERE score = score_whole_by_score
-      AND score = score_vcflag_by_score
+      AND score = score_vcountflag_by_score
       AND score = score_remainflag_by_score)
 EOF_SQL
 
@@ -270,8 +290,8 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
     SELECT t.*
     FROM "t_contents" AS "t"
       ,"v_whole" AS "v"
-    WHERE t.remainflag = 1
-      AND t.vcflag = 1
+    WHERE t.remainflag = #{FLAG_FLAGGED}
+      AND t.vcountflag = #{FLAG_FLAGGED}
       AND t.score
         BETWEEN MAX(v.score_lo_whole, :score_min)
             AND MIN(v.score_hi_whole, :score_max))
