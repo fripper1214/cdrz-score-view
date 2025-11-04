@@ -52,8 +52,8 @@ TAG_SALT_xxx001   = 'XHaQLceS'
 TAG_SALT_xxx002   = '0q0byeX1'
 TAG_SALT_xxx003   = 'p5CDSHCd'
 
-# view_count    表示回数     (times)
 # recent_clock  最終表示時刻 (unixtime)
+# view_count    表示回数     (times)
 # elapsed_sec   表示時間総計 (seconds)
 # score         スコア       (SCORE_RANGE)
 SQL_CREATE_TABLE_CONTENTS   = <<-"EOF_SQL"
@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS "contents" (
   "relpath"       TEXT    NOT NULL  UNIQUE,
   "dir_name"      TEXT    NOT NULL,
   "filename"      TEXT    NOT NULL,
-  "view_count"    INTEGER NOT NULL  DEFAULT 0,
   "recent_clock"  INTEGER NOT NULL  DEFAULT 0,
+  "view_count"    INTEGER NOT NULL  DEFAULT 0,
   "elapsed_sec"   INTEGER NOT NULL  DEFAULT 0,
   "score"         INTEGER NOT NULL  DEFAULT #{SCORE_INITIAL},
   "flag"          INTEGER NOT NULL  DEFAULT #{FLAG_NORMAL},
@@ -278,7 +278,7 @@ WITH
       AND score = score_remainflag_by_score)
 EOF_SQL
 
-SQL_CONTENTS_GETINFO_VIEWCOUNT = <<-"EOF_SQL"
+SQL_CONTENTS_GETINFO_VIEWCOUNT  = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
 SELECT v.*
 FROM "v_whole_by_score" AS "v"
