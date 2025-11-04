@@ -646,6 +646,26 @@ class FrRandView
                     @score_limit_hi = [@score_limit_hi.succ, SCORE_RANGE.last].min
                   end
 
+                # 表示対象となるスコア範囲を直接数値指定
+                when  *["\u0031",       '1',          # '1'
+                        "\u0032",       '2',          # '2'
+                        "\u0033",       '3',          # '3'
+                        "\u0034",       '4',          # '4'
+                        "\u0035",       '5',          # '5'
+                        "\u0036",       '6',          # '6'
+                        "\u0037",       '7',          # '7'
+                        "\u0038",       '8',          # '8'
+                        "\u0039",       '9',          # '9'
+                        "\u0030",       '0',  ] then  # '0'
+                  # 直近履歴コンテンツ閲覧モードではない場合のみ
+                  # 表示対象スコア範囲を、直接数値指定されたスコアのみにする
+                  unless @history_index > 0 then
+                    _val = _input_str.ord - 0x30
+                    _val = 10                 if _val == 0   # 0 だった場合は 10 が指定されたものとする
+                    @score_limit_lo = [_val, SCORE_RANGE.first].max
+                    @score_limit_hi = [_val, SCORE_RANGE.last].min
+                  end
+
                 # 今回の表示項目のスコア値を操作
                 when  *["\u002d",       '-',          # '-'
                         "\u005a",       'Z',          # 'Z'
