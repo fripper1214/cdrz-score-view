@@ -806,6 +806,7 @@ class FrRandView
   def run()
     updatedb()
     view_rand()
+    updatedb()
   end
 end
 #-------------------------------------------
