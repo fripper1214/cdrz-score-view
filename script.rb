@@ -177,146 +177,170 @@ EOF_SQL
 SQL_WITH_CLAUSE   = <<-"EOF_SQL"
 WITH
   "t_whole" AS (
+    -- contents から flag が FLAG_NORMAL のみを抽出
     SELECT c.*
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
-  ,"v_whole" AS (
-    SELECT COUNT(1) AS "count_whole"
-      ,MIN(t.score) AS "score_lo_whole"
-      ,MAX(t.score) AS "score_hi_whole"
-    FROM "t_whole" AS "t")
-  ,"v_whole_by_score" AS (
-    SELECT t.score AS "score_whole_by_score"
-      ,COUNT(1) AS "count_whole_by_score"
-      ,MIN(t.view_count) AS "view_count_lo_whole_by_score"
-      ,MAX(t.view_count) AS "view_count_hi_whole_by_score"
-      -- 同スコア内で MIN(view_count), MAX(view_count) を比較し
-      -- 同スコア内の view_count が全て同じ値となった場合
-      -- MAX(view_count) + 1 を判断基準値とする
-      -- 通常は MAX(t.view_count) そのものを判断基準値とする
+  ,"v_border_view_count" AS (
+    -- t_whole に対してスコア単位で view_count を基準とした閲覧対象・除外のしきい値を算出
+    -- 同スコア内で MIN(view_count), MAX(view_count) を比較し
+    -- 同スコア内の view_count が全て同じ値となった場合のみ
+    -- MAX(view_count) + 1 をしきい値とし
+    -- それ以外の場合 = 通常は MAX(t.view_count) そのものをしきい値とする
+    SELECT t.score AS "score_border_view_count"
       ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
         THEN MAX(t.view_count) + 1
-        ELSE MAX(t.view_count) END) AS "view_count_bl_whole_by_score"
+        ELSE MAX(t.view_count) END) AS "border_view_count"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
-  ,"t_vcountflag" AS (
+  ,"t_flag_view_count" AS (
+    -- t_whole に対して view_count を基準とした閲覧対象・除外のしきい値情報を付与
+    -- view_count がしきい値 border_view_count 未満の場合のみ
+    -- 閲覧対象候補とするため flag_view_count 値として FLAG_FLAGGED を返し
+    -- それ以外の場合 NULL を返す
     SELECT t.*
-      -- view_count が判断基準値 MAX(view_count) 未満の場合のみ
-      -- vcountflag 値として 1 を返す
-      ,(CASE WHEN t.view_count < v.view_count_bl_whole_by_score
+      ,(CASE WHEN t.view_count < v.border_view_count
         THEN #{FLAG_FLAGGED}
-        ELSE NULL END) AS "vcountflag"
+        ELSE NULL END) AS "flag_view_count"
     FROM "t_whole" AS "t"
-      ,"v_whole_by_score" AS "v"
-    WHERE t.score = v.score_whole_by_score)
-  ,"v_vcountflag_by_score" AS (
-    SELECT t.score AS "score_vcountflag_by_score"
-      ,COUNT(1) AS "count_vcountflag_by_score"
-      ,MIN(t.recent_clock) AS "recent_clock_lo_vcountflag_by_score"
-      ,MAX(t.recent_clock) AS "recent_clock_hi_vcountflag_by_score"
-      -- 同スコア内で vcountflag 対象の項目で MIN(recent_clock) が
-      -- criterion_clock 開始時刻よりも未来寄りの値となった
-      -- 場合のみ AVG(recent_clock) を判断基準値とする
-      -- 通常は criterion_clock そのものを判断基準値とする
-      ,(CASE WHEN MIN(t.recent_clock) >= :criterion_clock
-        THEN CAST(AVG(t.recent_clock) AS int)
-        ELSE :criterion_clock END) AS "recent_clock_bl_vcountflag_by_score"
-    FROM "t_vcountflag" AS "t"
-    WHERE t.vcountflag = #{FLAG_FLAGGED}
+      ,"v_border_view_count" AS "v"
+    WHERE t.score = v.score_border_view_count)
+  ,"v_border_recent_clock" AS (
+    -- t_flag_view_count の flag_view_count = FLAG_FLAGGED な項目
+    -- すなわち、view_count 基準で閲覧対象となっていた項目に対して
+    -- スコア単位で recent_clock を基準とした閲覧対象・除外のしきい値を算出
+    -- 同スコア内、かつ flag_view_count 対象の項目で MIN(recent_clock), 開始時刻(criterion_clock) を比較し
+    -- 全件が criterion_clock よりも未来寄りの値となった場合
+    -- すなわち、今回の起動で全件とも１度以上表示処理していた場合のみ
+    -- MAX(recent_clock) をしきい値とし
+    -- それ以外の場合 = 通常は criterion_clock そのものをしきい値とする
+    SELECT t.score AS "score_border_recent_clock"
+      ,(CASE WHEN MIN(t.recent_clock) > :criterion_clock
+        THEN MAX(t.recent_clock)
+        ELSE :criterion_clock END) AS "border_recent_clock"
+    FROM "t_flag_view_count" AS "t"
+    WHERE t.flag_view_count = #{FLAG_FLAGGED}
     GROUP BY t.score)
-  ,"t_remainflag" AS (
+  ,"t_flag_recent_clock" AS (
+    -- t_flag_view_count に対して recent_clock を基準とした閲覧対象・除外のしきい値情報を付与
+    -- recent_clock がしきい値 border_recent_clock と同じか過去寄りの値となった場合のみ
+    -- 閲覧対象候補とするため flag_recent_clock 値として FLAG_FLAGGED を返し
+    -- それ以外の場合 NULL を返す
     SELECT t.*
-      -- recent_clock が判断基準値 criterion_clock よりも
-      -- 過去寄りの値となった場合のみ remainflag 値として 1 を返す
-      ,(CASE WHEN t.recent_clock < v.recent_clock_bl_vcountflag_by_score
+      ,(CASE WHEN t.recent_clock <= v.border_recent_clock
         THEN #{FLAG_FLAGGED}
-        ELSE NULL END) AS "remainflag"
-    FROM "t_vcountflag" AS "t"
-      ,"v_vcountflag_by_score" AS "v"
-    WHERE t.score = v.score_vcountflag_by_score)
-  ,"v_remainflag" AS (
-    SELECT COUNT(1) AS "count_total_remainflag"
-      ,COUNT(CASE WHEN t.remainflag IS NULL
+        ELSE NULL END) AS "flag_recent_clock"
+    FROM "t_flag_view_count" AS "t"
+      ,"v_border_recent_clock" AS "v"
+    WHERE t.score = v.score_border_recent_clock)
+  ,"v_info_whole" AS (
+    -- t_flag_recent_clock に対して全体で
+    -- 総件数, 今回閲覧済件数, 閲覧対象残件数, score_min, score_max を算出
+    SELECT COUNT(1) AS "count_whole"
+      ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
              THEN 1
-             ELSE NULL END) AS "count_leaved_remainflag"
-      ,COUNT(CASE WHEN t.remainflag = #{FLAG_FLAGGED}
-                   AND t.vcountflag = #{FLAG_FLAGGED}
+             ELSE NULL END) AS "count_whole_leaved"
+      ,COUNT(CASE WHEN t.flag_recent_clock = #{FLAG_FLAGGED}
+                   AND t.flag_view_count   = #{FLAG_FLAGGED}
              THEN 1
-             ELSE NULL END) AS "count_remain_remainflag"
-    FROM "t_remainflag" AS "t")
-  ,"v_remainflag_by_score" AS (
-    SELECT t.score AS "score_remainflag_by_score"
-      ,COUNT(1) AS "count_total_remainflag_by_score"
-      ,COUNT(CASE WHEN t.remainflag IS NULL
+             ELSE NULL END) AS "count_whole_remain"
+      ,MIN(t.score) AS "score_whole_min"
+      ,MAX(t.score) AS "score_whole_max"
+    FROM "t_flag_recent_clock" AS "t")
+  ,"v_info_by_score" AS (
+    -- t_flag_recent_clock に対してスコア単位で
+    -- 総件数, 今回閲覧済件数, 閲覧対象残件数 を算出
+    SELECT t.score AS "score_by_score"
+      ,COUNT(1) AS "count_by_score"
+      ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
              THEN 1
-             ELSE NULL END) AS "count_leaved_remainflag_by_score"
-      ,COUNT(CASE WHEN t.remainflag = #{FLAG_FLAGGED}
-                   AND t.vcountflag = #{FLAG_FLAGGED}
+             ELSE NULL END) AS "count_by_score_leaved"
+      ,COUNT(CASE WHEN t.flag_recent_clock = #{FLAG_FLAGGED}
+                   AND t.flag_view_count   = #{FLAG_FLAGGED}
              THEN 1
-             ELSE NULL END) AS "count_remain_remainflag_by_score"
-    FROM "t_remainflag" AS "t"
+             ELSE NULL END) AS "count_by_score_remain"
+    FROM "t_flag_recent_clock" AS "t"
     GROUP BY t.score)
-  ,"v_sum_by_score" AS (
-    SELECT SUM(v.count_total_remainflag_by_score) AS "sum_total_remainflag_by_score"
-      ,SUM(v.count_leaved_remainflag_by_score) AS "sum_leaved_remainflag_by_score"
-      ,SUM(v.count_remain_remainflag_by_score) AS "sum_remain_remainflag_by_score"
-    FROM "v_remainflag_by_score" as "v"
-    WHERE v.score_remainflag_by_score
-      BETWEEN :score_min
-          AND :score_max)
+  ,"v_info_specified" AS (
+    -- v_info_whole として算出した score_min, score_max 情報と
+    -- v_info_by_score として算出したスコア単位での件数情報を利用して
+    -- 閲覧対象として指定したスコア範囲のみを対象とした
+    -- 総件数, 今回閲覧済件数, 閲覧対象残件数 を算出
+    SELECT SUM(s.count_by_score) AS "count_specified"
+      ,SUM(s.count_by_score_leaved) AS "count_specified_leaved"
+      ,SUM(s.count_by_score_remain) AS "count_specified_remain"
+    FROM "v_info_whole" AS "w"
+      ,"v_info_by_score" AS "s"
+    WHERE s.score_by_score
+      BETWEEN (CASE WHEN w.score_whole_min > :score_min
+               THEN w.score_whole_min
+               ELSE :score_min END)
+          AND (CASE WHEN w.score_whole_max < :score_max
+               THEN w.score_whole_max
+               ELSE :score_max END))
   ,"t_contents" AS (
+    -- 全件 contents に対して view_count, recent_clock 基準のフラグ情報が
+    -- 付与された全件のリスト情報に対し、さらに件数に関する情報が付与されたもの
     SELECT *
-    FROM "t_remainflag"
-      ,"v_whole"
-      ,"v_whole_by_score"
-      ,"v_vcountflag_by_score"
-      ,"v_remainflag"
-      ,"v_remainflag_by_score"
-      ,"v_sum_by_score"
-    WHERE score = score_whole_by_score
-      AND score = score_vcountflag_by_score
-      AND score = score_remainflag_by_score)
+    FROM "t_flag_recent_clock" AS "c" -- 全件 contents にフラグ情報が付与されたもの
+      ,"v_info_whole"          AS "w" -- 全体               総件数, 今回閲覧済件数, 閲覧対象残件数
+      ,"v_info_by_score"       AS "s" -- スコア毎           総件数, 今回閲覧済件数, 閲覧対象残件数
+      ,"v_info_specified"      AS "x" -- 閲覧対象スコア範囲 総件数, 今回閲覧済件数, 閲覧対象残件数
+    WHERE c.score = s.score_by_score)
 EOF_SQL
 
+=begin
+# 未実装
 SQL_CONTENTS_GETINFO_VIEWCOUNT  = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
 SELECT v.*
 FROM "v_whole_by_score" AS "v"
 EOF_SQL
+=end
 
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
-  ,"t_scored" AS (
+  ,"t_specified" AS (
+    -- t_contents に対して 閲覧対象フラグ条件が成立していて
+    -- なおかつ、閲覧対象として指定したスコア範囲のみに絞り込んだもの
     SELECT t.*
     FROM "t_contents" AS "t"
-      ,"v_whole" AS "v"
-    WHERE t.remainflag = #{FLAG_FLAGGED}
-      AND t.vcountflag = #{FLAG_FLAGGED}
+    WHERE t.flag_recent_clock = #{FLAG_FLAGGED}
+      AND t.flag_view_count   = #{FLAG_FLAGGED}
       AND t.score
-        BETWEEN MAX(v.score_lo_whole, :score_min)
-            AND MIN(v.score_hi_whole, :score_max))
-  ,"l_scored" AS (
-    SELECT t1.score AS "l_score", t1.ids256 AS "l_ids256"
-    FROM "t_scored" AS "t1"
+        BETWEEN (CASE WHEN t.score_whole_min > :score_min
+                 THEN t.score_whole_min
+                 ELSE :score_min END)
+            AND (CASE WHEN t.score_whole_max < :score_max
+                 THEN t.score_whole_max
+                 ELSE :score_max END))
+  ,"d_specified" AS (
+    -- t_specified に対して 各行の score カラム値に示された回数だけ
+    -- ids256 カラム値を繰り返し複製したものを生成
+    SELECT t.ids256 AS "d_ids256"
+      ,t.score AS "d_score"
+    FROM "t_specified" AS "t"
     UNION ALL
-    SELECT t2.l_score - 1, t2.l_ids256
-    FROM "l_scored" AS "t2"
-    WHERE t2.l_score > 1
-      AND t2.l_ids256 = l_ids256)
-  ,"r_scored" AS (
-    SELECT l.*
-    FROM "l_scored" AS "l"
+    SELECT d.d_score - 1, d.d_ids256
+    FROM "d_specified" AS "d"
+    WHERE d.d_score > 1)
+  ,"r_specified" AS (
+    -- d_specified からランダムで１件抽出して ids256 値を特定
+    SELECT d.*
+    FROM "d_specified" AS "d"
     LIMIT 1
     OFFSET ABS(RANDOM()) % MAX((
-    SELECT COUNT(1) FROM "l_scored"), 1))
+    SELECT COUNT(1) FROM "d_specified"), 1))
+-- t_specified に対して r_specified で特定された ids256 値に合致する行を抽出
 SELECT t.*
-FROM "t_scored" AS "t"
-  ,"r_scored" AS "r"
-WHERE t.ids256 = r.l_ids256;
+FROM "t_specified" AS "t"
+  ,"r_specified" AS "r"
+WHERE t.ids256 = r.d_ids256;
 EOF_SQL
 
 SQL_CONTENTS_SPECIFIED  = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
+-- t_contents に対して 明示した ids256 値に合致する行を抽出
 SELECT t.*
 FROM "t_contents" AS "t"
 WHERE t.ids256 = :ids256;
@@ -488,19 +512,19 @@ class FrRandView
     puts   (' ' * _pad2) << '      閲覧モード : ' << _view_mode
     puts   (' ' * _pad2) << '      ファイル数 : 閲覧済 / 閲覧対象 / 全体総数'
     printf (' ' * _pad2) << "        全体総数 : %6d : %8d : %8d\n", \
-      _entry['count_leaved_remainflag'] + 1, \
-      _entry['count_leaved_remainflag'] + _entry['count_remain_remainflag'], \
+      _entry['count_whole_leaved'] + 1, \
+      _entry['count_whole_leaved'] + _entry['count_whole_remain'], \
       _entry['count_whole']
     printf "スコア範囲(%s) : %6d : %8d : %8d\n", \
       _range, \
-      _entry['sum_leaved_remainflag_by_score'] + 1, \
-      _entry['sum_leaved_remainflag_by_score'] + _entry['sum_remain_remainflag_by_score'], \
-      _entry['sum_total_remainflag_by_score']
+      _entry['count_specified_leaved'] + 1, \
+      _entry['count_specified_leaved'] + _entry['count_specified_remain'], \
+      _entry['count_specified']
     printf (' ' * _pad1) << "  個別スコア(%d) : %6d : %8d : %8d\n", \
       _entry['score'], \
-      _entry['count_leaved_remainflag_by_score'] + 1, \
-      _entry['count_leaved_remainflag_by_score'] + _entry['count_remain_remainflag_by_score'], \
-      _entry['count_total_remainflag_by_score']
+      _entry['count_by_score_leaved'] + 1, \
+      _entry['count_by_score_leaved'] + _entry['count_by_score_remain'], \
+      _entry['count_by_score']
     puts   (' ' * _pad2) << '元作品タイトル名 : ' << File.basename(File.dirname(_entry['relpath']))
     puts   (' ' * _pad2) << '  コンテンツ書名 : ' << _entry['filename']
     puts   (' ' * _pad2) << '          スコア : ' << _score
@@ -522,6 +546,8 @@ class FrRandView
 
           # メインループ処理
           loop do
+=begin
+            # 未実装
             # 各スコア別の view_count 情報を取得
             _view_count_info = Hash.new()
             _listdb.execute(SQL_CONTENTS_GETINFO_VIEWCOUNT).each {|_entry|
@@ -533,6 +559,7 @@ class FrRandView
                 )
               )
             }
+=end
 
             # 次に表示させたい項目の history_index を算出
             if _process_mode.include?(PROCESS_SHOW_PREV) then
