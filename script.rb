@@ -177,115 +177,102 @@ EOF_SQL
 SQL_WITH_CLAUSE   = <<-"EOF_SQL"
 WITH
   "t_whole" AS (
-    -- contents から flag が FLAG_NORMAL のみを抽出
+    -- contents に対し flag = FLAG_NORMAL のみ抽出
     SELECT c.*
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
-  ,"v_border_view_count" AS (
-    -- t_whole に対してスコア単位で view_count を基準とした閲覧対象・除外のしきい値を算出
-    -- 同スコア内で MIN(view_count), MAX(view_count) を比較し
-    -- 同スコア内の view_count が全て同じ値となった場合のみ
-    -- MAX(view_count) + 1 をしきい値とし
-    -- それ以外の場合 = 通常は MAX(t.view_count) そのものをしきい値とする
-    SELECT t.score AS "score_border_view_count"
+  ,"v_whole_criterion" AS (
+    -- t_whole に対し、各スコア単位での view_count, recent_clock の基準値を算出
+    -- recent_clock の基準値は、通常は開始時刻(criterion_clock) そのものとし
+    -- 同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
+    -- MAX(recent_clock) を基準値とする
+    SELECT t.score AS "score_whole_criterion"
+      ,MIN(t.view_count) AS "min_view_count"
+      ,MAX(t.view_count) AS "max_view_count"
       ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
         THEN MAX(t.view_count) + 1
         ELSE MAX(t.view_count) END) AS "border_view_count"
+      ,MIN(t.recent_clock) AS "min_recent_clock"
+      ,MAX(t.recent_clock) AS "max_recent_clock"
+      ,(CASE WHEN MIN(t.recent_clock) < :criterion_clock
+        THEN :criterion_clock
+        ELSE MAX(t.recent_clock) END) AS "border_recent_clock"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
-  ,"t_flag_view_count" AS (
-    -- t_whole に対して view_count を基準とした閲覧対象・除外のしきい値情報を付与
-    -- view_count がしきい値 border_view_count 未満の場合のみ
-    -- 閲覧対象候補とするため flag_view_count 値として FLAG_FLAGGED を返し
-    -- それ以外の場合 NULL を返す
+  ,"t_whole_with_criterion" AS (
+    -- t_whole に対し view_count, recent_clock の基準値情報を付与
     SELECT t.*
       ,(CASE WHEN t.view_count < v.border_view_count
-        THEN #{FLAG_FLAGGED}
+        THEN v.border_view_count - t.view_count
         ELSE NULL END) AS "flag_view_count"
-    FROM "t_whole" AS "t"
-      ,"v_border_view_count" AS "v"
-    WHERE t.score = v.score_border_view_count)
-  ,"v_border_recent_clock" AS (
-    -- t_flag_view_count の flag_view_count = FLAG_FLAGGED な項目
-    -- すなわち、view_count 基準で閲覧対象となっていた項目に対して
-    -- スコア単位で recent_clock を基準とした閲覧対象・除外のしきい値を算出
-    -- 同スコア内、かつ flag_view_count 対象の項目で MIN(recent_clock), 開始時刻(criterion_clock) を比較し
-    -- 全件が criterion_clock よりも未来寄りの値となった場合
-    -- すなわち、今回の起動で全件とも１度以上表示処理していた場合のみ
-    -- MAX(recent_clock) をしきい値とし
-    -- それ以外の場合 = 通常は criterion_clock そのものをしきい値とする
-    SELECT t.score AS "score_border_recent_clock"
-      ,(CASE WHEN MIN(t.recent_clock) > :criterion_clock
-        THEN MAX(t.recent_clock)
-        ELSE :criterion_clock END) AS "border_recent_clock"
-    FROM "t_flag_view_count" AS "t"
-    WHERE t.flag_view_count = #{FLAG_FLAGGED}
-    GROUP BY t.score)
-  ,"t_flag_recent_clock" AS (
-    -- t_flag_view_count に対して recent_clock を基準とした閲覧対象・除外のしきい値情報を付与
-    -- recent_clock がしきい値 border_recent_clock と同じか過去寄りの値となった場合のみ
-    -- 閲覧対象候補とするため flag_recent_clock 値として FLAG_FLAGGED を返し
-    -- それ以外の場合 NULL を返す
-    SELECT t.*
-      ,(CASE WHEN t.recent_clock <= v.border_recent_clock
+      ,(CASE WHEN t.recent_clock < v.border_recent_clock
         THEN #{FLAG_FLAGGED}
         ELSE NULL END) AS "flag_recent_clock"
-    FROM "t_flag_view_count" AS "t"
-      ,"v_border_recent_clock" AS "v"
-    WHERE t.score = v.score_border_recent_clock)
+    FROM "t_whole" AS "t"
+      ,"v_whole_criterion" AS "v"
+    WHERE t.score = v.score_whole_criterion)
   ,"v_info_whole" AS (
-    -- t_flag_recent_clock に対して全体で
-    -- 総件数, 今回閲覧済件数, 閲覧対象残件数, score_min, score_max を算出
+    -- t_whole_with_criterion に対し
+    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
+    -- 同時に、指定されたスコア範囲を有効な範囲に丸め、score_min, score_max 情報を算出
     SELECT COUNT(1) AS "count_whole"
       ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
              THEN 1
              ELSE NULL END) AS "count_whole_leaved"
-      ,COUNT(CASE WHEN t.flag_recent_clock = #{FLAG_FLAGGED}
-                   AND t.flag_view_count   = #{FLAG_FLAGGED}
+      ,COUNT(CASE WHEN t.flag_recent_clock IS NOT NULL
+                   AND t.flag_view_count   IS NOT NULL
              THEN 1
              ELSE NULL END) AS "count_whole_remain"
-      ,MIN(t.score) AS "score_whole_min"
-      ,MAX(t.score) AS "score_whole_max"
-    FROM "t_flag_recent_clock" AS "t")
+      ,(CASE
+        WHEN MIN(t.score) > :score_min
+          THEN MIN(t.score)
+        WHEN MAX(t.score) < :score_min
+          THEN MAX(t.score)
+        ELSE :score_min
+        END) AS "border_score_min"
+      ,(CASE
+        WHEN MIN(t.score) > :score_max
+          THEN MIN(t.score)
+        WHEN MAX(t.score) < :score_max
+          THEN MAX(t.score)
+        ELSE :score_max
+        END) AS "border_score_max"
+    FROM "t_whole_with_criterion" AS "t")
   ,"v_info_by_score" AS (
-    -- t_flag_recent_clock に対してスコア単位で
-    -- 総件数, 今回閲覧済件数, 閲覧対象残件数 を算出
+    -- t_whole_with_criterion に対し、スコア単位で
+    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
     SELECT t.score AS "score_by_score"
       ,COUNT(1) AS "count_by_score"
       ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
              THEN 1
              ELSE NULL END) AS "count_by_score_leaved"
-      ,COUNT(CASE WHEN t.flag_recent_clock = #{FLAG_FLAGGED}
-                   AND t.flag_view_count   = #{FLAG_FLAGGED}
+      ,COUNT(CASE WHEN t.flag_recent_clock IS NOT NULL
+                   AND t.flag_view_count   IS NOT NULL
              THEN 1
              ELSE NULL END) AS "count_by_score_remain"
-    FROM "t_flag_recent_clock" AS "t"
+    FROM "t_whole_with_criterion" AS "t"
     GROUP BY t.score)
   ,"v_info_specified" AS (
-    -- v_info_whole として算出した score_min, score_max 情報と
-    -- v_info_by_score として算出したスコア単位での件数情報を利用して
+    -- v_info_by_score で算出したスコア単位の件数情報から
     -- 閲覧対象として指定したスコア範囲のみを対象とした
-    -- 総件数, 今回閲覧済件数, 閲覧対象残件数 を算出
+    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
+    -- 有効なスコア範囲として v_info_whole で算出した score_min, score_max 値を利用
     SELECT SUM(s.count_by_score) AS "count_specified"
       ,SUM(s.count_by_score_leaved) AS "count_specified_leaved"
       ,SUM(s.count_by_score_remain) AS "count_specified_remain"
     FROM "v_info_whole" AS "w"
       ,"v_info_by_score" AS "s"
     WHERE s.score_by_score
-      BETWEEN (CASE WHEN w.score_whole_min > :score_min
-               THEN w.score_whole_min
-               ELSE :score_min END)
-          AND (CASE WHEN w.score_whole_max < :score_max
-               THEN w.score_whole_max
-               ELSE :score_max END))
+      BETWEEN w.border_score_min
+          AND w.border_score_max)
   ,"t_contents" AS (
-    -- 全件 contents に対して view_count, recent_clock 基準のフラグ情報が
-    -- 付与された全件のリスト情報に対し、さらに件数に関する情報が付与されたもの
+    -- view_count, recent_clock 基準のフラグ情報が付与された全件のリスト情報と
+    -- 総件数, 閲覧済件数, 閲覧対象残件数 に関する情報
     SELECT *
-    FROM "t_flag_recent_clock" AS "c" -- 全件 contents にフラグ情報が付与されたもの
-      ,"v_info_whole"          AS "w" -- 全体               総件数, 今回閲覧済件数, 閲覧対象残件数
-      ,"v_info_by_score"       AS "s" -- スコア毎           総件数, 今回閲覧済件数, 閲覧対象残件数
-      ,"v_info_specified"      AS "x" -- 閲覧対象スコア範囲 総件数, 今回閲覧済件数, 閲覧対象残件数
+    FROM "t_whole_with_criterion" AS "c" -- 全件 contents にフラグ情報が付与されたもの
+      ,"v_info_whole"             AS "w" -- 全体               総件数, 閲覧済件数, 閲覧対象残件数
+      ,"v_info_by_score"          AS "s" -- スコア毎           総件数, 閲覧済件数, 閲覧対象残件数
+      ,"v_info_specified"         AS "x" -- 閲覧対象スコア範囲 総件数, 閲覧済件数, 閲覧対象残件数
     WHERE c.score = s.score_by_score)
 EOF_SQL
 
@@ -301,29 +288,26 @@ EOF_SQL
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
   ,"t_specified" AS (
-    -- t_contents に対して 閲覧対象フラグ条件が成立していて
+    -- t_contents に対し 閲覧対象フラグ条件が成立していて
     -- なおかつ、閲覧対象として指定したスコア範囲のみに絞り込んだもの
     SELECT t.*
+      ,(t.score * t.flag_view_count) AS "weight"
     FROM "t_contents" AS "t"
-    WHERE t.flag_recent_clock = #{FLAG_FLAGGED}
-      AND t.flag_view_count   = #{FLAG_FLAGGED}
+    WHERE t.flag_recent_clock IS NOT NULL
+      AND t.flag_view_count   IS NOT NULL
       AND t.score
-        BETWEEN (CASE WHEN t.score_whole_min > :score_min
-                 THEN t.score_whole_min
-                 ELSE :score_min END)
-            AND (CASE WHEN t.score_whole_max < :score_max
-                 THEN t.score_whole_max
-                 ELSE :score_max END))
+        BETWEEN t.border_score_min
+            AND t.border_score_max)
   ,"d_specified" AS (
-    -- t_specified に対して 各行の score カラム値に示された回数だけ
+    -- t_specified に対して 各行の weight カラム値に示された回数だけ
     -- ids256 カラム値を繰り返し複製したものを生成
     SELECT t.ids256 AS "d_ids256"
-      ,t.score AS "d_score"
+      ,t.weight AS "d_weight"
     FROM "t_specified" AS "t"
     UNION ALL
-    SELECT d.d_score - 1, d.d_ids256
+    SELECT d.d_weight - 1, d.d_ids256
     FROM "d_specified" AS "d"
-    WHERE d.d_score > 1)
+    WHERE d.d_weight > 1)
   ,"r_specified" AS (
     -- d_specified からランダムで１件抽出して ids256 値を特定
     SELECT d.*
