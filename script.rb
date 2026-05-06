@@ -458,8 +458,8 @@ class FrRandView
             :flag_target  => FLAG_FLAGGED,
           )
         }
-        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MIN, :limit => SCORE_RANGE.first)
-        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MAX, :limit => SCORE_RANGE.last)
+        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MIN,   :limit        => SCORE_RANGE.first)
+        _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MAX,   :limit        => SCORE_RANGE.last)
         _listdb.execute(SQL_CONTENTS_INIT_RECENT_CLOCK, :recent_clock => Time.now.to_i)
       rescue => e
         _listdb.rollback  if _listdb.transaction_active?
@@ -481,7 +481,7 @@ class FrRandView
 
     _range = Range.new(@score_limit_lo, @score_limit_hi).to_s
     _score = _entry['score'].to_s
-    _score << ' → ' << @score_modified.to_s  if _entry['score'] != @score_modified
+    _score << ' -> ' << @score_modified.to_s  if _entry['score'] != @score_modified
 
     if @history_index > 0 then
       _view_mode = '直近履歴コンテンツ閲覧: (' << [@history_index, '/', @history.length].join('') << ')'
@@ -593,9 +593,9 @@ class FrRandView
               show_info(_entry)
 
               # 表示処理を実行
-              _view_start = Time.now.to_i
+              _view_from = Time.now.to_i
               system(APP_VIEWER, *[File.join(PATH_MEDIA, _entry['relpath'])])
-              _view_end = Time.now.to_i
+              _view_till = Time.now.to_i
 
               # 表示終了後のキー操作をリアルタイムでコンソール処理
               #   echoback-off, unbuffered I/O
@@ -774,14 +774,14 @@ class FrRandView
               # 今回表示していた項目の DB 情報を更新
               _listdb.execute(SQL_CONTENTS_UPDATE_REFDATA,
                 :ids256         => _entry['ids256'],
-                :recent_clock   => _view_start,
+                :recent_clock   => _view_from,
                 :content_score  => @score_modified,
                 # 表示回数：既存回数に +1 した値を指定
                 #   直近履歴コンテンツ閲覧モードだった場合は同じ値のまま
                 :view_count     => (_clauses.has_key?(:ids256) ? _entry['view_count'] : _entry['view_count'].succ),
                 # 表示時間：今回の表示時間を指定、但し ELAPSED_LIMIT 秒を上限とする
                 #   累積値は UPDATE SQL 側で既存値と合算
-                :elapsed_sec    => [_view_end - _view_start, ELAPSED_LIMIT].min,
+                :elapsed_sec    => [_view_till - _view_from, ELAPSED_LIMIT].min,
                 # 削除フラグ値： FLAG_NORMAL or FLAG_FLAGGED
                 :flag           => (_process_mode.include?(PROCESS_REMOVE) ? FLAG_FLAGGED : FLAG_NORMAL),
               )
