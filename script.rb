@@ -1,4 +1,4 @@
-#!D:/Ruby3/bin/ruby
+#!D:/Ruby4/bin/ruby
 
 begin
   require 'rubygems'
