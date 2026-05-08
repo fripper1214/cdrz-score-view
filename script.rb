@@ -181,99 +181,70 @@ WITH
     SELECT c.*
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
-  ,"v_whole_criterion" AS (
-    -- t_whole に対し、各スコア単位での view_count, recent_clock の基準値を算出
-    -- recent_clock の基準値は、通常は開始時刻(criterion_clock) そのものとし
-    -- 同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
-    -- MAX(recent_clock) を基準値とする
-    SELECT t.score AS "score_whole_criterion"
-      ,MIN(t.view_count) AS "min_view_count"
-      ,MAX(t.view_count) AS "max_view_count"
-      ,(CASE WHEN MIN(t.view_count) = MAX(t.view_count)
-        THEN MAX(t.view_count) + 1
-        ELSE MAX(t.view_count) END) AS "border_view_count"
-      ,MIN(t.recent_clock) AS "min_recent_clock"
-      ,MAX(t.recent_clock) AS "max_recent_clock"
-      ,(CASE WHEN MIN(t.recent_clock) < :criterion_clock
-        THEN :criterion_clock
-        ELSE MAX(t.recent_clock) END) AS "border_recent_clock"
+  ,"v_dat1_score" AS (
+    -- t_whole に対し score 単位で
+    -- view_count, elapsed_sec, recent_clock の MIN/MAX 値
+    -- recent_clock の基準値を算出
+    --   通常は処理開始時刻(criterion_clock) そのものを基準値とし
+    --   同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
+    --   MAX(recent_clock) を基準値とする
+    SELECT t.score AS "score_dat1s"
+      ,MIN(t.view_count)    AS "min_vc_by_score"
+      ,MAX(t.view_count)    AS "max_vc_by_score"
+      ,MIN(t.elapsed_sec)   AS "min_es_by_score"
+      ,MAX(t.elapsed_sec)   AS "max_es_by_score"
+      ,MIN(t.recent_clock)  AS "min_rc_by_score"
+      ,MAX(t.recent_clock)  AS "max_rc_by_score"
+      ,CASE WHEN MIN(t.recent_clock) < :criterion_clock THEN :criterion_clock
+            ELSE MAX(t.recent_clock) END AS "thr_rc_by_score"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
-  ,"t_whole_with_criterion" AS (
-    -- t_whole に対し view_count, recent_clock の基準値情報を付与
-    SELECT t.*
-      ,(CASE WHEN t.view_count < v.border_view_count
-        THEN v.border_view_count - t.view_count
-        ELSE NULL END) AS "flag_view_count"
-      ,(CASE WHEN t.recent_clock < v.border_recent_clock
-        THEN #{FLAG_FLAGGED}
-        ELSE NULL END) AS "flag_recent_clock"
-    FROM "t_whole" AS "t"
-      ,"v_whole_criterion" AS "v"
-    WHERE t.score = v.score_whole_criterion)
-  ,"v_info_whole" AS (
-    -- t_whole_with_criterion に対し
-    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
-    -- 同時に、指定されたスコア範囲を有効な範囲に丸め、score_min, score_max 情報を算出
-    SELECT COUNT(1) AS "count_whole"
-      ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
-             THEN 1
-             ELSE NULL END) AS "count_whole_leaved"
-      ,COUNT(CASE WHEN t.flag_recent_clock IS NOT NULL
-                   AND t.flag_view_count   IS NOT NULL
-             THEN 1
-             ELSE NULL END) AS "count_whole_remain"
-      ,(CASE
-        WHEN MIN(t.score) > :score_min
-          THEN MIN(t.score)
-        WHEN MAX(t.score) < :score_min
-          THEN MAX(t.score)
-        ELSE :score_min
-        END) AS "border_score_min"
-      ,(CASE
-        WHEN MIN(t.score) > :score_max
-          THEN MIN(t.score)
-        WHEN MAX(t.score) < :score_max
-          THEN MAX(t.score)
-        ELSE :score_max
-        END) AS "border_score_max"
-    FROM "t_whole_with_criterion" AS "t")
-  ,"v_info_by_score" AS (
-    -- t_whole_with_criterion に対し、スコア単位で
-    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
-    SELECT t.score AS "score_by_score"
-      ,COUNT(1) AS "count_by_score"
-      ,COUNT(CASE WHEN t.flag_recent_clock IS NULL
-             THEN 1
-             ELSE NULL END) AS "count_by_score_leaved"
-      ,COUNT(CASE WHEN t.flag_recent_clock IS NOT NULL
-                   AND t.flag_view_count   IS NOT NULL
-             THEN 1
-             ELSE NULL END) AS "count_by_score_remain"
-    FROM "t_whole_with_criterion" AS "t"
+  ,"v_dat2_all" AS (
+    -- t_whole に対し全体対象で score の MIN/MAX 値と Lo/Hi 基準値
+    -- 全体の総件数, 閲覧済件数, 閲覧対象残件数を算出
+    SELECT COUNT(1) AS "cnt_all_total"
+      ,COUNT(CASE WHEN t.recent_clock >= v.thr_rc_by_score THEN 1 ELSE NULL END) "cnt_all_leaved"
+      ,COUNT(CASE WHEN t.recent_clock <  v.thr_rc_by_score THEN 1 ELSE NULL END) "cnt_all_remain"
+      ,MIN(t.score) AS "min_sc"
+      ,MAX(t.score) AS "max_sc"
+      ,(CASE WHEN MIN(t.score) > :score_min THEN MIN(t.score)
+             WHEN MAX(t.score) < :score_min THEN MAX(t.score)
+             ELSE :score_min END) AS "thr_sc_lo"
+      ,(CASE WHEN MIN(t.score) > :score_max THEN MIN(t.score)
+             WHEN MAX(t.score) < :score_max THEN MAX(t.score)
+             ELSE :score_max END) AS "thr_sc_hi"
+    FROM "t_whole"      AS "t"
+        ,"v_dat1_score" AS "v"
+    WHERE t.score = v.score_dat1s)
+  ,"v_dat3_score" AS (
+    -- t_whole に対し score 単位で総件数, 閲覧済件数, 閲覧対象残件数を算出
+    SELECT t.score AS "score_dat3s"
+      ,COUNT(1) AS "cnt_by_score_total"
+      ,COUNT(CASE WHEN t.recent_clock >= v.thr_rc_by_score THEN 1 ELSE NULL END) AS "cnt_by_score_leaved"
+      ,COUNT(CASE WHEN t.recent_clock <  v.thr_rc_by_score THEN 1 ELSE NULL END) AS "cnt_by_score_remain"
+    FROM "t_whole"      AS "t"
+        ,"v_dat1_score" AS "v"
+    WHERE t.score = v.score_dat1s
     GROUP BY t.score)
-  ,"v_info_specified" AS (
-    -- v_info_by_score で算出したスコア単位の件数情報から
-    -- 閲覧対象として指定したスコア範囲のみを対象とした
-    -- 総件数, 閲覧済件数, 閲覧対象残件数を算出
-    -- 有効なスコア範囲として v_info_whole で算出した score_min, score_max 値を利用
-    SELECT SUM(s.count_by_score) AS "count_specified"
-      ,SUM(s.count_by_score_leaved) AS "count_specified_leaved"
-      ,SUM(s.count_by_score_remain) AS "count_specified_remain"
-    FROM "v_info_whole" AS "w"
-      ,"v_info_by_score" AS "s"
-    WHERE s.score_by_score
-      BETWEEN w.border_score_min
-          AND w.border_score_max)
+  ,"v_dat4_specified" AS (
+    -- score 単位で算出した件数情報と score の Lo/Hi 基準値から
+    -- 閲覧対象の score 範囲のみ対象で総件数, 閲覧済件数, 閲覧対象残件数を算出
+    SELECT SUM(b.cnt_by_score_total)  AS "cnt_specified_total"
+          ,SUM(b.cnt_by_score_leaved) AS "cnt_specified_leaved"
+          ,SUM(b.cnt_by_score_remain) AS "cnt_specified_remain"
+    FROM "v_dat2_all"   AS "a"
+        ,"v_dat3_score" AS "b"
+    WHERE b.score_dat3s BETWEEN a.thr_sc_lo AND a.thr_sc_hi)
   ,"t_contents" AS (
-    -- view_count, recent_clock 基準のフラグ情報が付与された全件のリスト情報と
-    -- 総件数, 閲覧済件数, 閲覧対象残件数 に関する情報
+    -- t_whole と各条件毎の基準値, 総件数, 閲覧済件数, 閲覧対象残件数 に関する情報を結合
     SELECT *
-    FROM "t_whole_with_criterion" AS "c" -- 全件 contents にフラグ情報が付与されたもの
-      ,"v_info_whole"             AS "w" -- 全体               総件数, 閲覧済件数, 閲覧対象残件数
-      ,"v_info_by_score"          AS "s" -- スコア毎           総件数, 閲覧済件数, 閲覧対象残件数
-      ,"v_info_specified"         AS "x" -- 閲覧対象スコア範囲 総件数, 閲覧済件数, 閲覧対象残件数
-    WHERE c.score = s.score_by_score)
+    FROM "t_whole"          AS "t" -- 全件               -- contents
+        ,"v_dat1_score"     AS "s" -- スコア毎           -- 各 MIN/MAX 値と recent_clock の基準値
+        ,"v_dat2_all"       AS "a" -- 全件               -- 総件数, 閲覧済件数, 閲覧対象残件数, score MIN/MAX の基準値
+        ,"v_dat3_score"     AS "b" -- スコア毎           -- 総件数, 閲覧済件数, 閲覧対象残件数
+        ,"v_dat4_specified" AS "c" -- 閲覧対象スコア範囲 -- 総件数, 閲覧済件数, 閲覧対象残件数
+    WHERE t.score = s.score_dat1s
+      AND t.score = b.score_dat3s)
 EOF_SQL
 
 =begin
@@ -287,17 +258,40 @@ EOF_SQL
 
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
 #{SQL_WITH_CLAUSE}
-  ,"t_specified" AS (
-    -- t_contents に対し 閲覧対象フラグ条件が成立していて
-    -- なおかつ、閲覧対象として指定したスコア範囲のみに絞り込んだもの
+  ,"v_dat5_specified" AS (
+    -- t_contents を閲覧対象スコア範囲のみに絞り込み
+    -- 各行に view_count, elapsed_sec, recent_clock 基準の相対比較値を付与
+    --   view_count   -- 最大値に近づくように MAX との差分を相対値
+    --   elapsed_sec  -- 最大値に近づくように MAX との差分を相対値
+    --   recent_clock -- 時間差が大きいほど優先されるように基準時刻からの差分を相対値
     SELECT t.*
-      ,(t.score * t.flag_view_count) AS "weight"
+      ,ABS(t.max_vc_by_score - t.view_count)    AS "cal_vc"
+      ,ABS(t.max_es_by_score - t.elapsed_sec)   AS "cal_es"
+      ,ABS(t.recent_clock - t.thr_rc_by_score)  AS "cal_rc"
     FROM "t_contents" AS "t"
-    WHERE t.flag_recent_clock IS NOT NULL
-      AND t.flag_view_count   IS NOT NULL
-      AND t.score
-        BETWEEN t.border_score_min
-            AND t.border_score_max)
+    WHERE t.score BETWEEN t.thr_sc_lo AND t.thr_sc_hi)
+  ,"v_dat6_rank" AS (
+    -- 各行に付与していた view_count, elapsed_sec, recent_clock の相対比較値から
+    -- 各々を基準とした PERCENT_RANK 値を算出
+    SELECT v.*
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_vc ASC) AS "per_vc"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_es ASC) AS "per_es"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_rc ASC) AS "per_rc"
+    FROM "v_dat5_specified" AS "v")
+  ,"v_dat7_rank" AS (
+    -- 各行に付与していた PERCENT_RANK 値から最も重要視されるべき項目を特定し
+    -- その重要度から 1-10 の group に分類
+    SELECT v.*
+      ,NTILE(10) OVER (PARTITION BY v.score ORDER BY MAX(v.per_vc, v.per_es, v.per_rc) ASC) AS "per_val"
+    FROM "v_dat6_rank" AS "v")
+  ,"t_specified" AS (
+    -- 各行に付与していた PERCENT_RANK 基準の group 値と score 値から weight 値を算出
+    -- score:group:weight
+    --   1:1-10: 1-10,  2:1-10: 3-12,  3:1-10: 5-14,  4:1-10: 7-16,  5:1-10: 9-18
+    --   6:1-10:11-20,  7:1-10:13-22,  8:1-10:15-24,  9:1-10:17-26, 10:1-10:19-28
+    SELECT v.*
+      ,(v.per_val + ((v.score - 1) * 2)) AS "weight"
+    FROM "v_dat7_rank" AS "v")
   ,"d_specified" AS (
     -- t_specified に対して 各行の weight カラム値に示された回数だけ
     -- ids256 カラム値を繰り返し複製したものを生成
@@ -499,19 +493,19 @@ class FrRandView
     puts   (' ' * _pad2) << '      閲覧モード : ' << _view_mode
     puts   (' ' * _pad2) << '      ファイル数 : 閲覧済 / 閲覧対象 / 全体総数'
     printf (' ' * _pad2) << "        全体総数 : %6d : %8d : %8d\n", \
-      _entry['count_whole_leaved'] + 1, \
-      _entry['count_whole_leaved'] + _entry['count_whole_remain'], \
-      _entry['count_whole']
+      _entry['cnt_all_leaved'] + 1, \
+      _entry['cnt_all_leaved'] + _entry['cnt_all_remain'], \
+      _entry['cnt_all_total']
     printf "スコア範囲(%s) : %6d : %8d : %8d\n", \
       _range, \
-      _entry['count_specified_leaved'] + 1, \
-      _entry['count_specified_leaved'] + _entry['count_specified_remain'], \
-      _entry['count_specified']
+      _entry['cnt_specified_leaved'] + 1, \
+      _entry['cnt_specified_leaved'] + _entry['cnt_specified_remain'], \
+      _entry['cnt_specified_total']
     printf (' ' * _pad1) << "  個別スコア(%d) : %6d : %8d : %8d\n", \
       _entry['score'], \
-      _entry['count_by_score_leaved'] + 1, \
-      _entry['count_by_score_leaved'] + _entry['count_by_score_remain'], \
-      _entry['count_by_score']
+      _entry['cnt_by_score_leaved'] + 1, \
+      _entry['cnt_by_score_leaved'] + _entry['cnt_by_score_remain'], \
+      _entry['cnt_by_score_total']
     puts   (' ' * _pad2) << '元作品タイトル名 : ' << File.basename(File.dirname(_entry['relpath']))
     puts   (' ' * _pad2) << '  コンテンツ書名 : ' << _entry['filename']
     puts   (' ' * _pad2) << '          スコア : ' << _score
