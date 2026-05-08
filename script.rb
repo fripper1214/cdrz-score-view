@@ -301,11 +301,14 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
   ,"d_specified" AS (
     -- t_specified に対して 各行の weight カラム値に示された回数だけ
     -- ids256 カラム値を繰り返し複製したものを生成
+    --   (ids256, weight-1) を返すテーブルと UNION ALL して再帰クエリし
+    --   weight 値の数だけ行を複製した ids256 のリストを生成
     SELECT t.ids256 AS "d_ids256"
       ,t.weight AS "d_weight"
     FROM "t_specified" AS "t"
     UNION ALL
-    SELECT d.d_weight - 1, d.d_ids256
+    SELECT d.d_ids256
+      ,d.d_weight - 1
     FROM "d_specified" AS "d"
     WHERE d.d_weight > 1)
   ,"r_specified" AS (
@@ -314,11 +317,11 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
     FROM "d_specified" AS "d"
     LIMIT 1
     OFFSET ABS(RANDOM()) % MAX((
-    SELECT COUNT(1) FROM "d_specified"), 1))
+      SELECT COUNT(1) FROM "d_specified"), 1))
 -- t_specified に対して r_specified で特定された ids256 値に合致する行を抽出
 SELECT t.*
 FROM "t_specified" AS "t"
-  ,"r_specified" AS "r"
+    ,"r_specified" AS "r"
 WHERE t.ids256 = r.d_ids256;
 EOF_SQL
 
@@ -577,6 +580,7 @@ class FrRandView
             # 処理の制御情報をクリア
             _process_mode.clear
 
+            IO.write('output.txt', _sql, mode: 'a')   if @debug_mode
             _listdb.execute(_sql, _clauses).each {|_entry|
               # 対象項目１件毎の処理ループ
               @score_modified = _entry['score']
