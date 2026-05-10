@@ -273,25 +273,32 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
   ,"v_dat6_rank" AS (
     -- 各行に付与していた view_count, elapsed_sec, recent_clock の相対比較値から
     -- 各々を基準とした PERCENT_RANK 値を算出
+    --   同:view_count   -- 比:elapsed_sec -- 比:recent_clock
+    --   同:elapsed_sec  -- 比:view_count  -- 比:recent_clock
+    --   同:recent_clock -- 比:view_count  -- 比:elapsed_sec
     SELECT v.*
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_vc ASC) AS "per_vc"
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_es ASC) AS "per_es"
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_rc ASC) AS "per_rc"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_vc ASC, v.cal_es ASC, v.cal_rc ASC) AS "per_vc"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_es ASC, v.cal_vc ASC, v.cal_rc ASC) AS "per_es"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_rc ASC, v.cal_vc ASC, v.cal_es ASC) AS "per_rc"
     FROM "v_dat5_specified" AS "v")
   ,"v_dat7_rank" AS (
-    -- 各行に付与していた PERCENT_RANK 値から最も重要視されるべき項目を特定し
-    -- その重要度から 1-10 の group に分類
+    -- 各行に付与していた PERCENT_RANK 値から最も重要視されるべき項目を特定
     SELECT v.*
-      ,NTILE(10) OVER (PARTITION BY v.score ORDER BY MAX(v.per_vc, v.per_es, v.per_rc) ASC) AS "per_val"
+      ,MAX(v.per_vc, v.per_es, v.per_rc) AS "per_max"
     FROM "v_dat6_rank" AS "v")
+  ,"v_dat8_rank" AS (
+    -- PERCENT_RANK 基準の重要度から 1-10 の group に分類
+    SELECT v.*
+      ,NTILE(10) OVER (PARTITION BY v.score ORDER BY v.per_max ASC) AS "per_val"
+    FROM "v_dat7_rank" AS "v")
   ,"t_specified" AS (
-    -- 各行に付与していた PERCENT_RANK 基準の group 値と score 値から weight 値を算出
-    -- score:group:weight
-    --   1:1-10: 1-10,  2:1-10: 3-12,  3:1-10: 5-14,  4:1-10: 7-16,  5:1-10: 9-18
-    --   6:1-10:11-20,  7:1-10:13-22,  8:1-10:15-24,  9:1-10:17-26, 10:1-10:19-28
+    -- 各行に付与していた重要度基準の group 値と score 値から weight 値を算出
+    --   weight = group + ((score - 1) * 2)
+    --     score=1: 1-10, 2: 3-12, 3: 5-14, 4: 7-16,  5: 9-18
+    --     score=6:11-20, 7:13-22, 8:15-24, 9:17-26, 10:19-28
     SELECT v.*
       ,(v.per_val + ((v.score - 1) * 2)) AS "weight"
-    FROM "v_dat7_rank" AS "v")
+    FROM "v_dat8_rank" AS "v")
   ,"d_specified" AS (
     -- t_specified に対して 各行の weight カラム値に示された回数だけ
     -- ids256 カラム値を繰り返し複製したものを生成
