@@ -23,6 +23,7 @@ SELF_BASE = File.basename(__FILE__, SELF_EXT)
 
 PATH_MEDIA      = File.join(SELF_PATH, SELF_BASE).encode('UTF-8')
 FILNAME_DB      = [SELF_BASE, '.db'].join.encode('UTF-8')
+FILNAME_DEBUG   = [SELF_BASE, '.debug'].join.encode('UTF-8')
 APP_VIEWER      = 'C:/Program Files/IrfanView/cdrzviewer.exe'
 INTERVAL_SECOND = 2.55
 ENUM_FILES_STEP = 100
@@ -581,7 +582,8 @@ class FrRandView
             # 処理の制御情報をクリア
             _process_mode.clear
 
-            IO.write('output.txt', _sql, mode: 'a')   if @debug_mode
+            IO.write(FILNAME_DEBUG, _clauses.to_json, mode: 'a')  if @debug_mode
+            IO.write(FILNAME_DEBUG, _sql,             mode: 'a')  if @debug_mode
             _listdb.execute(_sql, _clauses).each {|_entry|
               # 対象項目１件毎の処理ループ
               @score_modified = _entry['score']
