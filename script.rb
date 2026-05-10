@@ -5,6 +5,7 @@ begin
   rescue LoadError
 end
 require 'sqlite3'           # databse access
+require 'json'              # json format
 require 'timeout'           # interval sleep
 require 'pathname'          # pathname/dirname/filename handling
 require 'digest'            # hash/contents-id
@@ -179,12 +180,15 @@ SQL_WITH_CLAUSE   = <<-"EOF_SQL"
 WITH
   "t_whole" AS (
     -- contents に対し flag = FLAG_NORMAL のみ抽出
+    -- 同時に１回あたりの平均参照時間を avg_sec として算出
     SELECT c.*
+      ,(CASE WHEN c.view_count = 0 THEN 0
+             ELSE c.elapsed_sec / c.view_count END) AS "avg_sec"
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
   ,"v_dat1_score" AS (
     -- t_whole に対し score 単位で
-    -- view_count, elapsed_sec, recent_clock の MIN/MAX 値
+    -- view_count, avg_sec, recent_clock の MIN/MAX 値
     -- recent_clock の基準値を算出
     --   通常は処理開始時刻(criterion_clock) そのものを基準値とし
     --   同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
@@ -192,8 +196,8 @@ WITH
     SELECT t.score AS "score_dat1s"
       ,MIN(t.view_count)    AS "min_vc_by_score"
       ,MAX(t.view_count)    AS "max_vc_by_score"
-      ,MIN(t.elapsed_sec)   AS "min_es_by_score"
-      ,MAX(t.elapsed_sec)   AS "max_es_by_score"
+      ,MIN(t.avg_sec)       AS "min_as_by_score"
+      ,MAX(t.avg_sec)       AS "max_as_by_score"
       ,MIN(t.recent_clock)  AS "min_rc_by_score"
       ,MAX(t.recent_clock)  AS "max_rc_by_score"
       ,CASE WHEN MIN(t.recent_clock) < :criterion_clock THEN :criterion_clock
@@ -251,41 +255,41 @@ EOF_SQL
 =begin
 # 未実装
 SQL_CONTENTS_GETINFO_VIEWCOUNT  = <<-"EOF_SQL"
-#{SQL_WITH_CLAUSE}
+#{SQL_WITH_CLAUSE.chomp}
 SELECT v.*
 FROM "v_whole_by_score" AS "v"
 EOF_SQL
 =end
 
 SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
-#{SQL_WITH_CLAUSE}
+#{SQL_WITH_CLAUSE.chomp}
   ,"v_dat5_specified" AS (
     -- t_contents を閲覧対象スコア範囲のみに絞り込み
-    -- 各行に view_count, elapsed_sec, recent_clock 基準の相対比較値を付与
+    -- 各行に view_count, avg_sec, recent_clock 基準の相対比較値を付与
     --   view_count   -- 最大値に近づくように MAX との差分を相対値
-    --   elapsed_sec  -- 最大値に近づくように MAX との差分を相対値
+    --   avg_sec      -- 最大値に近づくように MAX との差分を相対値
     --   recent_clock -- 時間差が大きいほど優先されるように基準時刻からの差分を相対値
     SELECT t.*
       ,ABS(t.max_vc_by_score - t.view_count)    AS "cal_vc"
-      ,ABS(t.max_es_by_score - t.elapsed_sec)   AS "cal_es"
+      ,ABS(t.max_as_by_score - t.avg_sec)       AS "cal_as"
       ,ABS(t.recent_clock - t.thr_rc_by_score)  AS "cal_rc"
     FROM "t_contents" AS "t"
     WHERE t.score BETWEEN t.thr_sc_lo AND t.thr_sc_hi)
   ,"v_dat6_rank" AS (
-    -- 各行に付与していた view_count, elapsed_sec, recent_clock の相対比較値から
+    -- 各行に付与していた view_count, avg_sec, recent_clock の相対比較値から
     -- 各々を基準とした PERCENT_RANK 値を算出
-    --   同:view_count   -- 比:elapsed_sec -- 比:recent_clock
-    --   同:elapsed_sec  -- 比:view_count  -- 比:recent_clock
-    --   同:recent_clock -- 比:view_count  -- 比:elapsed_sec
+    --   同:view_count   -- 比:avg_sec     -- 比:recent_clock
+    --   同:avg_sec      -- 比:view_count  -- 比:recent_clock
+    --   同:recent_clock -- 比:view_count  -- 比:avg_sec
     SELECT v.*
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_vc ASC, v.cal_es ASC, v.cal_rc ASC) AS "per_vc"
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_es ASC, v.cal_vc ASC, v.cal_rc ASC) AS "per_es"
-      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_rc ASC, v.cal_vc ASC, v.cal_es ASC) AS "per_rc"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_vc ASC, v.cal_as ASC, v.cal_rc ASC) AS "per_vc"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_as ASC, v.cal_vc ASC, v.cal_rc ASC) AS "per_as"
+      ,PERCENT_RANK() OVER (PARTITION BY v.score ORDER BY v.cal_rc ASC, v.cal_vc ASC, v.cal_as ASC) AS "per_rc"
     FROM "v_dat5_specified" AS "v")
   ,"v_dat7_rank" AS (
     -- 各行に付与していた PERCENT_RANK 値から最も重要視されるべき項目を特定
     SELECT v.*
-      ,MAX(v.per_vc, v.per_es, v.per_rc) AS "per_max"
+      ,MAX(v.per_vc, v.per_as, v.per_rc) AS "per_max"
     FROM "v_dat6_rank" AS "v")
   ,"v_dat8_rank" AS (
     -- PERCENT_RANK 基準の重要度から 1-10 の group に分類
@@ -328,7 +332,7 @@ WHERE t.ids256 = r.d_ids256;
 EOF_SQL
 
 SQL_CONTENTS_SPECIFIED  = <<-"EOF_SQL"
-#{SQL_WITH_CLAUSE}
+#{SQL_WITH_CLAUSE.chomp}
 -- t_contents に対して 明示した ids256 値に合致する行を抽出
 SELECT t.*
 FROM "t_contents" AS "t"
@@ -582,8 +586,8 @@ class FrRandView
             # 処理の制御情報をクリア
             _process_mode.clear
 
-            IO.write(FILNAME_DEBUG, _clauses.to_json, mode: 'a')  if @debug_mode
-            IO.write(FILNAME_DEBUG, _sql,             mode: 'a')  if @debug_mode
+            IO.write(FILNAME_DEBUG, _clauses.to_json << "\n", mode: 'a')  if @debug_mode
+            IO.write(FILNAME_DEBUG, _sql,                     mode: 'a')  if @debug_mode
             _listdb.execute(_sql, _clauses).each {|_entry|
               # 対象項目１件毎の処理ループ
               @score_modified = _entry['score']
