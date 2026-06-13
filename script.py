@@ -209,7 +209,7 @@ for score in range(score_min, score_max + 1):
 
   ax.scatter(x, y, z,
     s=cal_w,
-    color=tuple(c[score - 1]),
+    color=tuple(c[score - score_min]),
     marker='*',
     alpha=0.4, label=('score=' + str(score)))
 
