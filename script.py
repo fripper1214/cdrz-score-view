@@ -25,15 +25,15 @@ WITH
     -- contents に対し flag = FLAG_NORMAL のみ抽出
     -- 同時に１回あたりの平均参照時間を avg_sec として算出
     SELECT c.*
-      ,(CASE WHEN c.view_count = 0 THEN 0
-             ELSE c.elapsed_sec / c.view_count END) AS "avg_sec"
+      ,(CASE WHEN c.view_count = 0 THEN 0.0
+             ELSE CAST(c.elapsed_sec AS FLOAT) / c.view_count END) AS "avg_sec"
     FROM "contents" AS "c"
     WHERE c.flag = 0)
   ,"v_dat1_score" AS (
     -- t_whole に対し score 単位で
     -- view_count, avg_sec, recent_clock の MIN/MAX 値
     -- recent_clock の基準値を算出
-    --   通常は処理開始時刻(criterion_clock) そのものを基準値とし
+    --   通常は表示ループ処理開始時刻(start_clock) そのものを基準値とし
     --   同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
     --   MAX(recent_clock) を基準値とする
     SELECT t.score AS "score_dat1s"
@@ -43,7 +43,7 @@ WITH
       ,MAX(t.avg_sec)       AS "max_as_by_score"
       ,MIN(t.recent_clock)  AS "min_rc_by_score"
       ,MAX(t.recent_clock)  AS "max_rc_by_score"
-      ,CASE WHEN MIN(t.recent_clock) < :criterion_clock THEN :criterion_clock
+      ,CASE WHEN MIN(t.recent_clock) < :start_clock THEN :start_clock
             ELSE MAX(t.recent_clock) END AS "thr_rc_by_score"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
@@ -98,11 +98,11 @@ WITH
     -- 各行に view_count, avg_sec, recent_clock 基準の相対比較値を付与
     --   view_count   -- 最大値に近づくように MAX との差分を相対値
     --   avg_sec      -- 最大値に近づくように MAX との差分を相対値
-    --   recent_clock -- 時間差が大きいほど優先されるように基準時刻からの差分を相対値
+    --   recent_clock -- 時間差が大きいほど優先されるように現在時刻からの差分を相対値
     SELECT t.*
-      ,ABS(t.max_vc_by_score - t.view_count)    AS "cal_vc"
-      ,ABS(t.max_as_by_score - t.avg_sec)       AS "cal_as"
-      ,ABS(t.recent_clock - t.thr_rc_by_score)  AS "cal_rc"
+      ,ABS(t.max_vc_by_score - t.view_count) AS "cal_vc"
+      ,ABS(t.max_as_by_score - t.avg_sec)    AS "cal_as"
+      ,ABS(:current_clock - t.recent_clock)  AS "cal_rc"
     FROM "t_contents" AS "t"
     WHERE t.score BETWEEN t.thr_sc_lo AND t.thr_sc_hi)
   ,"v_dat6_rank" AS (
@@ -166,7 +166,8 @@ FROM t_specified as t
 sqlparams = {
   'score_min': 1,
   'score_max': 10,
-  'criterion_clock': int(time.time())
+  'start_clock': int(time.time()),
+  'current_clock': int(time.time())
 }
 
 conn = sqlite3.connect(new_path)
