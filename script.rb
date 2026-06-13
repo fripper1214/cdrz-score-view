@@ -182,15 +182,15 @@ WITH
     -- contents に対し flag = FLAG_NORMAL のみ抽出
     -- 同時に１回あたりの平均参照時間を avg_sec として算出
     SELECT c.*
-      ,(CASE WHEN c.view_count = 0 THEN 0
-             ELSE c.elapsed_sec / c.view_count END) AS "avg_sec"
+      ,(CASE WHEN c.view_count = 0 THEN 0.0
+             ELSE CAST(c.elapsed_sec AS FLOAT) / c.view_count END) AS "avg_sec"
     FROM "contents" AS "c"
     WHERE c.flag = #{FLAG_NORMAL})
   ,"v_dat1_score" AS (
     -- t_whole に対し score 単位で
     -- view_count, avg_sec, recent_clock の MIN/MAX 値
     -- recent_clock の基準値を算出
-    --   通常は処理開始時刻(criterion_clock) そのものを基準値とし
+    --   通常は表示ループ処理開始時刻(start_clock) そのものを基準値とし
     --   同スコア内の全件が１度以上閲覧済 = 未来寄りの値の場合のみ
     --   MAX(recent_clock) を基準値とする
     SELECT t.score AS "score_dat1s"
@@ -200,7 +200,7 @@ WITH
       ,MAX(t.avg_sec)       AS "max_as_by_score"
       ,MIN(t.recent_clock)  AS "min_rc_by_score"
       ,MAX(t.recent_clock)  AS "max_rc_by_score"
-      ,CASE WHEN MIN(t.recent_clock) < :criterion_clock THEN :criterion_clock
+      ,CASE WHEN MIN(t.recent_clock) < :start_clock THEN :start_clock
             ELSE MAX(t.recent_clock) END AS "thr_rc_by_score"
     FROM "t_whole" AS "t"
     GROUP BY t.score)
@@ -268,11 +268,11 @@ SQL_CONTENTS_RANDOM   = <<-"EOF_SQL"
     -- 各行に view_count, avg_sec, recent_clock 基準の相対比較値を付与
     --   view_count   -- 最大値に近づくように MAX との差分を相対値
     --   avg_sec      -- 最大値に近づくように MAX との差分を相対値
-    --   recent_clock -- 時間差が大きいほど優先されるように基準時刻からの差分を相対値
+    --   recent_clock -- 時間差が大きいほど優先されるように現在時刻からの差分を相対値
     SELECT t.*
-      ,ABS(t.max_vc_by_score - t.view_count)    AS "cal_vc"
-      ,ABS(t.max_as_by_score - t.avg_sec)       AS "cal_as"
-      ,ABS(t.recent_clock - t.thr_rc_by_score)  AS "cal_rc"
+      ,ABS(t.max_vc_by_score - t.view_count) AS "cal_vc"
+      ,ABS(t.max_as_by_score - t.avg_sec)    AS "cal_as"
+      ,ABS(:current_clock - t.recent_clock)  AS "cal_rc"
     FROM "t_contents" AS "t"
     WHERE t.score BETWEEN t.thr_sc_lo AND t.thr_sc_hi)
   ,"v_dat6_rank" AS (
@@ -426,6 +426,7 @@ class FrRandView
           :flag_target  => FLAG_NOTFOUND,
         )
       }
+      _start_clock = Time.now.to_i
       _listdb.transaction
       begin
         _cnt = 0
@@ -469,7 +470,7 @@ class FrRandView
         }
         _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MIN,   :limit        => SCORE_RANGE.first)
         _listdb.execute(SQL_CONTENTS_LIMIT_SCORE_MAX,   :limit        => SCORE_RANGE.last)
-        _listdb.execute(SQL_CONTENTS_INIT_RECENT_CLOCK, :recent_clock => Time.now.to_i)
+        _listdb.execute(SQL_CONTENTS_INIT_RECENT_CLOCK, :recent_clock => _start_clock)
       rescue => e
         _listdb.rollback  if _listdb.transaction_active?
         puts e.message
@@ -534,8 +535,8 @@ class FrRandView
       begin
         _listdb.results_as_hash = true
         begin
-          _process_mode     = Array.new()         # 処理の制御情報
-          _criterion_clock  = Time.now.to_i - 1   # 表示ループ処理の開始時刻
+          _process_mode = Array.new()   # 処理の制御情報
+          _start_clock  = Time.now.to_i # 表示ループ処理の開始時刻
 
           # メインループ処理
           loop do
@@ -569,9 +570,9 @@ class FrRandView
 
             # SQL 句に指定するパラメータ情報を格納するハッシュを生成
             _clauses = Hash.new()
-            _clauses.store(:criterion_clock,  _criterion_clock)   # 表示ループ処理の開始時刻
-            _clauses.store(:score_min,        @score_limit_lo)    # 対象スコア範囲
-            _clauses.store(:score_max,        @score_limit_hi)
+            _clauses.store(:score_min,    @score_limit_lo)  # 対象スコア範囲
+            _clauses.store(:score_max,    @score_limit_hi)
+            _clauses.store(:start_clock,  _start_clock)     # 表示ループ処理の開始時刻
 
             if @history_index > 0 then
               # 直近履歴コンテンツ閲覧モード
@@ -581,6 +582,7 @@ class FrRandView
             else
               # スコア範囲ランダム閲覧モード
               _sql = SQL_CONTENTS_RANDOM
+              _clauses.store(:current_clock,  Time.now.to_i)  # SQL 実行時点での現在時刻
             end
 
             # 処理の制御情報をクリア
